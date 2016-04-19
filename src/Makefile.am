@@ -17,8 +17,9 @@ include $(srcdir)/postgres/backend/Makefile.am
 include $(srcdir)/postgres/common/Makefile.am
 include $(srcdir)/postgres/port/Makefile.am
 include $(srcdir)/postgres/parser/Makefile.am
+include $(srcdir)/wire/Makefile.am
 
-bin_PROGRAMS = parser
+bin_PROGRAMS = parser wire_server
 
 lib_LTLIBRARIES = libparser.la
 
@@ -55,9 +56,13 @@ libparser_la_LDFLAGS = -lprotobuf
 ######################################################################
 
 parser_SOURCES = main.cpp
-parser_LDFLAGS = 
+parser_LDFLAGS =
 parser_CPPFLAGS = -I. -I$(top_srcdir)/src -I.. $(postgres_common_INCLUDES) $(AM_CPPFLAGS)
 
 parser_LDADD = libparser.la
 
+wire_server_SOURCES = wire_main.cpp $(wire_FILES) 
+wire_server_LDFLAGS = -lpthread
+wire_server_CPPFLAGS = -I. -I$(top_srcdir)/src -I.. $(postgres_common_INCLUDES) $(AM_CPPFLAGS)
 
+wire_server_LDADD = libparser.la
