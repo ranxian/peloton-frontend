@@ -342,6 +342,8 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
         int param_len = packet_getint(pkt, 4);
         auto param = packet_getbytes(pkt, param_len);
         std::string param_str = std::string(std::begin(param), std::end(param));
+
+        // TODO: should handle param types
         bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
         LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
       }
@@ -369,8 +371,15 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       std::string portal_name = get_string_token(pkt);
 
       // covers weird JDBC edge case of sending double BEGIN statements. Don't execute them
-      if(hardcoded_execute_filter()){
-        isFailed = db.InitBindPrepStmt(query.c_str(), bind_parameters, &stmt, errMsg);
+      if (hardcoded_execute_filter()) {
+        isFailed = db.PrepareStmt(query.c_str(), bind_parameters, &stmt, errMsg);
+        if (isFailed) {
+          send_error_response({{'M', errMsg}}, responses);
+          send_ready_for_query(txn_state, responses);
+          return true;
+        }
+
+        isFailed = db.BindStmt(bind_parameters, &stmt, errMsg);
         if (isFailed) {
           send_error_response({{'M', errMsg}}, responses);
           send_ready_for_query(txn_state, responses);

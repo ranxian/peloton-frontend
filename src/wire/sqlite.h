@@ -15,9 +15,6 @@ namespace wiredb {
 
 #define UNUSED __attribute__((unused))
 class Sqlite : public DataBase {
-
-
-
 public:
   Sqlite() {
     // sqlite3_open(filename, sqlite3 **db)
@@ -39,8 +36,14 @@ public:
     sqlite3_close(db);
   }
 
-
-  virtual int PortalExec(const char *query, std::vector<ResType> &res, std::vector<FieldInfoType> &info, int &rows_change, std::string &errMsg) {
+  /*
+   * PortalExec - Execute query string
+   */
+  virtual int PortalExec(const char *query,
+                         std::vector<ResType> &res,
+                         std::vector<FieldInfoType> &info,
+                         int &rows_change,
+                         std::string &errMsg) {
     LOG_INFO("receive %s", query);
     sqlite3_stmt *sql_stmt;
     sqlite3_prepare_v2(db, query, -1, &sql_stmt, NULL);
@@ -66,56 +69,78 @@ public:
     }
   }
 */
-  int InitBindPrepStmt(const char *query, std::vector<std::pair<int, std::string>> &parameters UNUSED, void ** stmt, std::string &errMsg) {
-    LOG_INFO("PARAMS SIZE:%zu", parameters.size());
+
+  /*
+   * InitBindPrepStmt - Prepare and bind a query from a query string
+   */
+  int PrepareStmt(
+      const char *query,
+      std::vector<std::pair<int, std::string>> &parameters UNUSED,
+      void **stmt,
+      std::string &errMsg) {
     sqlite3_stmt *sql_stmt = nullptr;
     int rc = sqlite3_prepare_v2(db, query, -1, &sql_stmt, NULL);
     if (rc != SQLITE_OK) {
       errMsg = std::string(sqlite3_errmsg(db));
       return 1;
     }
-    for (int i = 0; i < (int)parameters.size(); i++) {
 
-      auto &item = parameters[i];
-      switch (item.first) {
-        case WIRE_INTEGER:
-          LOG_INFO("BIND INT:%d", std::stoi(item.second));
-          rc = sqlite3_bind_int(sql_stmt, i + 1, std::stoi(item.second));
-          if (rc != SQLITE_OK) {
-            LOG_INFO("bind err %s", sqlite3_errmsg(db));
-            errMsg = std::string(sqlite3_errmsg(db));
-            return 1;
-          }
-          break;
-        case WIRE_FLOAT:
-          rc = sqlite3_bind_double(sql_stmt, i + 1, std::stod(item.second));
-          if (rc != SQLITE_OK) {
-            LOG_INFO("bind err %s", sqlite3_errmsg(db));
-            errMsg = std::string(sqlite3_errmsg(db));
-            return 1;
-          }
-          break;
-        case WIRE_TEXT:
-          LOG_INFO("BIND TEXT:%s", item.second.c_str());
-          rc = sqlite3_bind_text(sql_stmt, i + 1, item.second.c_str(), (int)item.second.size(), 0);
-          if (rc != SQLITE_OK) {
-            LOG_INFO("bind err %s", sqlite3_errmsg(db));
-            errMsg = std::string(sqlite3_errmsg(db));
-            return 1;
-          }
-          break;
-        default:
-          LOG_INFO("unknown bind type");
-          break;
+    *(sqlite3_stmt **)stmt = sql_stmt;
+    return 0;
+  }
+
+  int BindStmt(
+      std::vector<std::pair<int, std::string>> &parameters,
+      void **stmt, std::string &errMsg) {
+    // BIND
+    LOG_INFO("PARAMS SIZE: %zu", parameters.size());
+
+    auto *sql_stmt = (sqlite3_stmt *) *stmt;
+    int paramno = 1;
+    for (auto &param : parameters) {
+      auto wire_type = param.first;
+      auto &wire_val = param.second;
+      int rc;
+      switch (wire_type) {
+        case WIRE_INTEGER: {
+          int int_val = std::stoi(wire_val);
+          LOG_INFO("BIND INT: %d", int_val);
+          rc = sqlite3_bind_int(sql_stmt, paramno, int_val);
+        } break;
+        case WIRE_FLOAT: {
+          double double_val = std::stod(wire_val);
+          LOG_INFO("BIND FLOAT: %lf", double_val);
+          rc = sqlite3_bind_double(sql_stmt, paramno, double_val);
+        } break;
+        case WIRE_TEXT: {
+          const char *str_val = wire_val.c_str();
+          size_t str_len = wire_val.size();
+          LOG_INFO("BIND TEXT: %s", str_val);
+          rc = sqlite3_bind_text(sql_stmt, paramno, str_val, (int) str_len, 0);
+        } break;
+        default: {
+          LOG_INFO("Unknown bind type");
+          return 1;
+        }
       }
+      if (rc != SQLITE_OK) {
+        LOG_INFO("Error in binding: %s", sqlite3_errmsg(db));
+        errMsg = std::string(sqlite3_errmsg(db));
+        return 1;
+      }
+      paramno++;
     }
 
     *(sqlite3_stmt **)stmt = sql_stmt;
     return 0;
   }
 
-
-  int ExecPrepStmt(void *stmt, std::vector<ResType> &res, std::vector<FieldInfoType> &info, int &rows_change, std::string &errMsg) {
+  /*
+   * ExecPrepStmt - Execute a statement from a prepared and bound statement
+   */
+  int ExecPrepStmt(void *stmt, std::vector<ResType> &res,
+                   std::vector<FieldInfoType> &info, int &rows_change,
+                   std::string &errMsg) {
     LOG_INFO("Executing statement......................");
     auto sql_stmt = (sqlite3_stmt *)stmt;
     auto ret = sqlite3_step(sql_stmt);
@@ -194,7 +219,8 @@ private:
 
     // test bind
     void *s;
-    InitBindPrepStmt("insert into A (id, data) values ( ?, ? )", parameters, &s, err);
+    PrepareStmt("insert into A (id, data) values ( ?, ? )", parameters, &s, err);
+    BindStmt(parameters, &s, err);
     ExecPrepStmt(s, res, info, rows, err);
     res.clear();
 
