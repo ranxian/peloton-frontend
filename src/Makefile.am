@@ -62,7 +62,7 @@ parser_CPPFLAGS = -I. -I$(top_srcdir)/src -I.. $(postgres_common_INCLUDES) $(AM_
 parser_LDADD = libparser.la
 
 wire_server_SOURCES = wire_main.cpp $(wire_FILES) 
-wire_server_LDFLAGS = -lpthread
+wire_server_LDFLAGS = -lpthread -lsqlite3
 wire_server_CPPFLAGS = -I. -I$(top_srcdir)/src -I.. $(postgres_common_INCLUDES) $(AM_CPPFLAGS)
 
 wire_server_LDADD = libparser.la
