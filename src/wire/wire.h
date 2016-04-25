@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <boost/assign/list_of.hpp>
 #include "assert.h"
+#include "cache.h"
+#include "cache_entry.h"
 
 /* TXN state definitions */
 #define BUFFER_INIT_SIZE 100
@@ -58,10 +60,10 @@ struct Packet {
 class PacketManager {
   Client client;
 
-  std::string query, query_type;
-  std::vector<std::pair<int, std::string>> bind_parameters;
+  std::shared_ptr<CacheEntry> unnamed_entry;
+  std::string query_type;
   uchar txn_state;
-  std::unordered_map<std::string, std::string> PrepStmtTable;
+  bool skipped_stmt_;
 
   wiredb::Sqlite db;
 

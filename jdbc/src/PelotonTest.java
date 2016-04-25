@@ -266,7 +266,7 @@ public class PelotonTest {
     PelotonTest pt = new PelotonTest();
     pt.Init();
     //pt.Insert(3, TABLE.A);
-    pt.Insert(20);
+    pt.Insert(2);
     pt.SeqScan();
     //pt.ReadModifyWrite(3);
     //pt.SeqScan();

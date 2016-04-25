@@ -29,7 +29,7 @@ public:
     }
 
     // TODO: remove test
-    // test();
+     test();
   }
 
   virtual ~Sqlite() {
@@ -43,15 +43,15 @@ public:
                          std::vector<ResType> &res,
                          std::vector<FieldInfoType> &info,
                          int &rows_change,
-                         std::string &errMsg) {
+                         std::string &err_msg) {
     LOG_INFO("receive %s", query);
     sqlite3_stmt *sql_stmt;
     sqlite3_prepare_v2(db, query, -1, &sql_stmt, NULL);
-    return ExecPrepStmt(sql_stmt, res, info, rows_change, errMsg);
+    return ExecPrepStmt(sql_stmt, res, info, rows_change, err_msg);
   }
 /*
 
-  int PortalDesc(const char *table_name, std::vector<FieldInfoType> &field_info, std::string &errMsg) {
+  int PortalDesc(const char *table_name, std::vector<FieldInfoType> &field_info, std::string &err_msg) {
 
     char *zErrMsg = 0;
 
@@ -61,7 +61,7 @@ public:
     if (rc != SQLITE_OK) {
       LOG_INFO("error in des %s", zErrMsg);
       if (zErrMsg != NULL)
-        errMsg = std::string(zErrMsg);
+        err_msg = std::string(zErrMsg);
         sqlite3_free(zErrMsg);
       return 1;
     } else {
@@ -73,29 +73,21 @@ public:
   /*
    * InitBindPrepStmt - Prepare and bind a query from a query string
    */
-  int PrepareStmt(
-      const char *query,
-      std::vector<std::pair<int, std::string>> &parameters UNUSED,
-      void **stmt,
-      std::string &errMsg) {
-    sqlite3_stmt *sql_stmt = nullptr;
-    int rc = sqlite3_prepare_v2(db, query, -1, &sql_stmt, NULL);
+  int PrepareStmt(const char *query, sqlite3_stmt **stmt, std::string &err_msg) {
+    int rc = sqlite3_prepare_v2(db, query, -1, stmt, NULL);
     if (rc != SQLITE_OK) {
-      errMsg = std::string(sqlite3_errmsg(db));
+      err_msg = std::string(sqlite3_errmsg(db));
       return 1;
     }
 
-    *(sqlite3_stmt **)stmt = sql_stmt;
     return 0;
   }
 
-  int BindStmt(
-      std::vector<std::pair<int, std::string>> &parameters,
-      void **stmt, std::string &errMsg) {
+  int BindStmt(std::vector<std::pair<int, std::string>> &parameters,
+               sqlite3_stmt **stmt, std::string &err_msg) {
     // BIND
     LOG_INFO("PARAMS SIZE: %zu", parameters.size());
 
-    auto *sql_stmt = (sqlite3_stmt *) *stmt;
     int paramno = 1;
     for (auto &param : parameters) {
       auto wire_type = param.first;
@@ -105,18 +97,18 @@ public:
         case WIRE_INTEGER: {
           int int_val = std::stoi(wire_val);
           LOG_INFO("BIND INT: %d", int_val);
-          rc = sqlite3_bind_int(sql_stmt, paramno, int_val);
+          rc = sqlite3_bind_int(*stmt, paramno, int_val);
         } break;
         case WIRE_FLOAT: {
           double double_val = std::stod(wire_val);
           LOG_INFO("BIND FLOAT: %lf", double_val);
-          rc = sqlite3_bind_double(sql_stmt, paramno, double_val);
+          rc = sqlite3_bind_double(*stmt, paramno, double_val);
         } break;
         case WIRE_TEXT: {
           const char *str_val = wire_val.c_str();
           size_t str_len = wire_val.size();
           LOG_INFO("BIND TEXT: %s", str_val);
-          rc = sqlite3_bind_text(sql_stmt, paramno, str_val, (int) str_len, 0);
+          rc = sqlite3_bind_text(*stmt, paramno, str_val, (int) str_len, 0);
         } break;
         default: {
           LOG_INFO("Unknown bind type");
@@ -125,13 +117,12 @@ public:
       }
       if (rc != SQLITE_OK) {
         LOG_INFO("Error in binding: %s", sqlite3_errmsg(db));
-        errMsg = std::string(sqlite3_errmsg(db));
+        err_msg = std::string(sqlite3_errmsg(db));
         return 1;
       }
       paramno++;
     }
 
-    *(sqlite3_stmt **)stmt = sql_stmt;
     return 0;
   }
 
@@ -140,7 +131,7 @@ public:
    */
   int ExecPrepStmt(void *stmt, std::vector<ResType> &res,
                    std::vector<FieldInfoType> &info, int &rows_change,
-                   std::string &errMsg) {
+                   std::string &err_msg) {
     LOG_INFO("Executing statement......................");
     auto sql_stmt = (sqlite3_stmt *)stmt;
     auto ret = sqlite3_step(sql_stmt);
@@ -184,12 +175,12 @@ public:
       ret = sqlite3_step(sql_stmt);
     }
 
-    sqlite3_finalize(sql_stmt);
+    sqlite3_reset(sql_stmt);
     sqlite3_db_release_memory(db);
     // sql_stmt = nullptr;
     if (ret != SQLITE_DONE) {
       LOG_INFO("ret num %d, err is %s", ret, sqlite3_errmsg(db));
-      errMsg = std::string(sqlite3_errmsg(db));
+      err_msg = std::string(sqlite3_errmsg(db));
       return 1;
     }
     rows_change = sqlite3_changes(db);
@@ -199,6 +190,7 @@ public:
 
 private:
   void test() {
+    LOG_INFO("RUN TEST");
 
     std::vector<ResType> res;
     std::vector<FieldInfoType> info;
@@ -207,26 +199,29 @@ private:
 
 
     // create table
-    PortalExec("CREATE TABLE A (id INT PRIMARY KEY, data TEXT);", res, info, rows, err);
+    PortalExec("DROP TABLE IF EXISTS AA", res, info, rows, err);
+    PortalExec("CREATE TABLE AA (id INT PRIMARY KEY, data TEXT);", res, info, rows, err);
     res.clear();
 
     // test simple insert
-    PortalExec("INSERT INTO A VALUES (1, 'abc'); ", res, info, rows, err);
+    PortalExec("INSERT INTO AA VALUES (1, 'abc'); ", res, info, rows, err);
     std::vector<std::pair<int, std::string>> parameters;
-    parameters.push_back(std::make_pair(WIRE_INTEGER, std::string("12")));
+    parameters.push_back(std::make_pair(WIRE_TEXT, std::string("12")));
     parameters.push_back(std::make_pair(WIRE_TEXT, std::string("abc")));
 
 
     // test bind
-    void *s;
-    PrepareStmt("insert into A (id, data) values ( ?, ? )", parameters, &s, err);
+    sqlite3_stmt *s;
+    PrepareStmt("insert into AA (id, data) values ( ?, ? )", &s, err);
+    BindStmt(parameters, &s, err);
+    ExecPrepStmt(s, res, info, rows, err);
     BindStmt(parameters, &s, err);
     ExecPrepStmt(s, res, info, rows, err);
     res.clear();
 
     // select all
     sqlite3_stmt *sql_stmt;
-    sqlite3_prepare_v2(db, "select * from A;", -1, &sql_stmt, NULL);
+    sqlite3_prepare_v2(db, "select * from AA;", -1, &sql_stmt, NULL);
     res.clear();
     info.clear();
     ExecPrepStmt(sql_stmt, res, info, rows, err);
@@ -246,7 +241,6 @@ private:
     }
 
     res.clear();
-    PortalExec("DROP TABLE A", res, info, rows, err);
   }
   static inline void copyFromTo(const char *src, std::vector<unsigned char> &dst) {
     if (src == nullptr) {

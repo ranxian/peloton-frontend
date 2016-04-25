@@ -3,6 +3,9 @@
 //
 
 #include "marshall.h"
+#include "cache.h"
+#include "portal.h"
+#include "cache_entry.h"
 #include <stdio.h>
 #include <boost/algorithm/string.hpp>
 #include <unordered_map>
@@ -12,6 +15,9 @@
 namespace peloton {
 namespace wire {
 
+thread_local Cache<std::string, CacheEntry> cache_;
+  // TODO: Should be replaced by dedicated class
+thread_local std::unordered_map<std::string, std::shared_ptr<Portal>> portals_;
 
 const std::unordered_map<std::string, std::string> PacketManager::parameter_status_map =
   boost::assign::map_list_of ("application_name","psql")("client_encoding", "UTF8")
@@ -22,19 +28,19 @@ const std::unordered_map<std::string, std::string> PacketManager::parameter_stat
   ("TimeZone", "US/Eastern");
 
 void print_packet(Packet* pkt UNUSED) {
-  //  if (pkt->msg_type) {
-  //    LOG_INFO("MsgType: %d", pkt->msg_type);
-  //  }
-  //
-  //  LOG_INFO("Len: %zu", pkt->len);
-  //
-  //  LOG_INFO("BufLen: %zu", pkt->buf.size());
+  //if (pkt->msg_type) {
+    //LOG_INFO("MsgType: %d", pkt->msg_type);
+  //}
 
-  //  LOG_INFO("{");
-  //  for (auto ele : pkt->buf) {
-  //    LOG_INFO("%d,", ele);
-  //  }
-  //  LOG_INFO("}\n");
+  //LOG_INFO("Len: %zu", pkt->len);
+
+  //LOG_INFO("BufLen: %zu", pkt->buf.size());
+
+  //LOG_INFO("{");
+  //for (auto ele : pkt->buf) {
+    //LOG_INFO("%d,", ele);
+  //}
+  //LOG_INFO("}\n");
 }
 
 void print_uchar_vector(std::vector<uchar>& vec){
@@ -234,6 +240,7 @@ bool PacketManager::hardcoded_execute_filter() {
     return false;
   return true;
 }
+
 /*
  * process_packet - Main switch block; process incoming packets,
  *  Returns false if the seesion needs to be closed.
@@ -269,13 +276,13 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
 
         std::vector<wiredb::ResType> results;
         std::vector<wiredb::FieldInfoType> rowdesc;
-        std::string errMsg;
+        std::string err_msg;
         int rows_affected;
 
-        int isfailed =  db.PortalExec(query->c_str(), results, rowdesc, rows_affected, errMsg);
+        int isfailed =  db.PortalExec(query->c_str(), results, rowdesc, rows_affected, err_msg);
 
         if(isfailed) {
-          send_error_response({{'M', errMsg}}, responses);
+          send_error_response({{'M', err_msg}}, responses);
           break;
         }
 
@@ -292,16 +299,64 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
     }
 
     case 'P': {
-      std::string prep_stmt  = get_string_token(pkt);
-      LOG_INFO("Prep stmt: %s", prep_stmt.c_str());
+      // PARSE message
+      LOG_INFO("PARSE message");
+      std::string err_msg;
+      std::string prep_stmt_name = get_string_token(pkt);
 
-      query = get_string_token(pkt);
+      // Read prepare statement name
+      sqlite3_stmt *stmt = nullptr;
+      LOG_INFO("Prep stmt: %s", prep_stmt_name.c_str());
+      // Read query string
+      std::string query = get_string_token(pkt);
       LOG_INFO("Query: %s", query.c_str());
 
+      // Workaround to bypass SET, BEGIN, ROLLBACK and COMMIT
+      std::vector<std::string> query_tokens;
+      boost::split(query_tokens, query, boost::is_any_of(" "),
+                   boost::token_compress_on);
+      query_type = query_tokens[0];
+      skipped_stmt_ = false;
+      if (!hardcoded_execute_filter()) {
+        skipped_stmt_ = true;
+        LOG_INFO("Statement skipped");
+        std::unique_ptr<Packet> response(new Packet());
+        // Send Parse complete response
+        response->msg_type = '1';
+        responses.push_back(std::move(response));
+        break;
+      }
+
+      // Read number of params
       int num_params = packet_getint(pkt, 2);
       LOG_INFO("NumParams: %d", num_params);
 
-      // TODO: Finish processing for each paramater
+      // Read param types
+      std::vector<int32_t> param_types(num_params);
+      for (int i = 0; i < num_params; i++) {
+        int param_type = packet_getint(pkt, 4);
+        param_types[i] = param_type;
+      }
+
+      // Prepare statement
+      bool is_failed = db.PrepareStmt(query.c_str(), &stmt, err_msg);
+      if (is_failed) {
+        send_error_response({{'M', err_msg}}, responses);
+        send_ready_for_query(txn_state, responses);
+      }
+      std::shared_ptr<CacheEntry> entry(new CacheEntry());
+      entry->stmt_name = prep_stmt_name;
+      entry->query_string = query;
+      entry->sql_stmt = stmt;
+      entry->param_types = std::move(param_types);
+
+      if (prep_stmt_name.empty()) {
+        // Unnamed statement
+        unnamed_entry = entry;
+      } else {
+        cache_.insert(std::make_pair(std::move(prep_stmt_name), entry));
+      }
+
       std::unique_ptr<Packet> response(new Packet());
 
       // Send Parse complete response
@@ -311,41 +366,76 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
     }
 
     case 'B': {
+      // BIND message
+      LOG_INFO("BIND message");
       std::string portal_name = get_string_token(pkt);
       LOG_INFO("Portal name: %s", portal_name.c_str());
       std::string prep_stmt_name = get_string_token(pkt);
       LOG_INFO("Prep stmt name: %s", prep_stmt_name.c_str());
 
-      if(!prep_stmt_name.empty()) {
-        if (PrepStmtTable.find(prep_stmt_name) == std::end(PrepStmtTable)) {
-          PrepStmtTable[prep_stmt_name] = query;
-        } else {
-          query = PrepStmtTable[prep_stmt_name];
-        }
+      if (skipped_stmt_) {
+        //send bind complete
+        std::unique_ptr<Packet> response(new Packet());
+        response->msg_type = '2';
+        responses.push_back(std::move(response));
+        break;
       }
 
-      std::vector<std::string> query_tokens;
-      boost::split(query_tokens, query, boost::is_any_of(" "), boost::token_compress_on);
-      query_type = query_tokens[0];
-
-      int param_code_count = packet_getint(pkt, 2);
-      // skip paramter codes for now
-      for(int i=0; i < param_code_count; i++) {
-        // keep skipping 2 bytes
+      // Read parameter format
+      int num_params_format = packet_getint(pkt, 2);
+      for (int i = 0; i < num_params_format; i++) {
         packet_getint(pkt, 2);
       }
 
-      int param_count = packet_getint(pkt, 2);
-      bind_parameters.clear();
+      int num_params = packet_getint(pkt, 2);
+      if (num_params_format != num_params) {
+        // TODO: Should throw error here.
+      }
 
-      for (int i=0; i < param_count; i++) {
+      std::vector<std::pair<int, std::string>> bind_parameters;
+      for (int i = 0; i < num_params; i++) {
         int param_len = packet_getint(pkt, 4);
         auto param = packet_getbytes(pkt, param_len);
         std::string param_str = std::string(std::begin(param), std::end(param));
 
-        // TODO: should handle param types
+        // TODO: Tricky workaround for sqlite: always treat as TEXT
         bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
         LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
+      }
+
+      sqlite3_stmt *stmt = nullptr;
+      std::string query_string;
+      if (prep_stmt_name.empty()) {
+        stmt = unnamed_entry->sql_stmt;
+        query_string = unnamed_entry->query_string;
+      } else {
+        auto itr = cache_.find(prep_stmt_name);
+        if (itr != cache_.end()) {
+          stmt = (*itr)->sql_stmt;
+          query_string = (*itr)->query_string;
+        } else {
+          // TODO: throw error here
+        }
+      }
+
+      std::string err_msg;
+      bool is_failed = db.BindStmt(bind_parameters, &stmt, err_msg);
+      if (is_failed) {
+        send_error_response({{'M', err_msg}}, responses);
+        send_ready_for_query(txn_state, responses);
+      }
+
+      std::shared_ptr<Portal> portal(new Portal());
+      portal->query_string = std::move(query_string);
+      portal->stmt = stmt;
+      portal->portal_name = std::move(portal_name);
+
+      auto itr = portals_.find(portal_name);
+      if (portals_.find(portal_name) == portals_.end()) {
+        portals_.insert(std::make_pair(portal_name, portal));
+      } else {
+        std::shared_ptr<Portal> p = itr->second;
+        itr->second = portal;
       }
 
       //send bind complete
@@ -363,49 +453,43 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
     }
 
     case 'E': {
+      // EXECUTE message
+      LOG_INFO("EXECUTE message");
       std::vector<wiredb::ResType> results;
       std::vector<wiredb::FieldInfoType> rowdesc;
-      std::string errMsg;
-      void *stmt = nullptr;
-      int rows_affected = 0, isFailed;
+      std::string err_msg;
+      sqlite3_stmt *stmt = nullptr;
+      int rows_affected = 0, is_failed;
       std::string portal_name = get_string_token(pkt);
 
       // covers weird JDBC edge case of sending double BEGIN statements. Don't execute them
-      if (hardcoded_execute_filter()) {
-        isFailed = db.PrepareStmt(query.c_str(), bind_parameters, &stmt, errMsg);
-        if (isFailed) {
-          send_error_response({{'M', errMsg}}, responses);
-          send_ready_for_query(txn_state, responses);
-          return true;
-        }
-
-        isFailed = db.BindStmt(bind_parameters, &stmt, errMsg);
-        if (isFailed) {
-          send_error_response({{'M', errMsg}}, responses);
-          send_ready_for_query(txn_state, responses);
-          return true;
-        }
-
-        ASSERT(stmt != nullptr);
-        LOG_INFO("Executing query: %s", query.c_str());
-        isFailed = db.ExecPrepStmt(stmt, results, rowdesc, rows_affected, errMsg);
-
-        if (isFailed) {
-          send_error_response({{'M', errMsg}}, responses);
-          send_ready_for_query(txn_state, responses);
-        }
-
-        put_row_desc(rowdesc, responses);
-
-        send_data_rows(results, rowdesc.size(), responses);
+      if (skipped_stmt_) {
+        LOG_INFO("Statement skipped");
+        complete_command(query_type, rows_affected, responses);
+        break;
       }
 
+      auto portal = portals_[portal_name];
+      stmt = portal->stmt;
+      ASSERT(stmt != nullptr);
+
+      LOG_INFO("Executing query: %s", portal->query_string.c_str());
+      is_failed = db.ExecPrepStmt(stmt, results, rowdesc, rows_affected,
+                                  err_msg);
+      if (is_failed) {
+        send_error_response({{'M', err_msg}}, responses);
+        send_ready_for_query(txn_state, responses);
+      }
+
+      put_row_desc(rowdesc, responses);
+      send_data_rows(results, rowdesc.size(), responses);
       complete_command(query_type, rows_affected, responses);
 
       break;
     }
 
     case 'S': {
+      // SYNC message
       send_ready_for_query(txn_state, responses);
       break;
     }
