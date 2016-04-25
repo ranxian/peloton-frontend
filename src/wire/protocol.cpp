@@ -198,9 +198,16 @@ void PacketManager::put_dummy_data_row(int colcount, int start,
   responses.push_back(std::move(pkt));
 }
 
-void PacketManager::complete_command(std::string &query_type, int rows, ResponseBuffer& responses) {
+std::string get_query_type(std::string query) {
+  std::vector<std::string> query_tokens;
+  boost::split(query_tokens, query, boost::is_any_of(" "), boost::token_compress_on);
+  return query_tokens[0];
+}
+
+void PacketManager::complete_command(std::string &query, int rows, ResponseBuffer& responses) {
   std::unique_ptr<Packet> pkt(new Packet());
   pkt->msg_type = 'C';
+  std::string query_type = get_query_type(query);
   std::string tag = query_type;
   if(!query_type.compare("BEGIN"))
     txn_state = TXN_BLOCK;
@@ -226,7 +233,8 @@ void PacketManager::send_empty_query_response(ResponseBuffer& responses) {
   responses.push_back(std::move(response));
 }
 
-bool PacketManager::hardcoded_execute_filter() {
+bool PacketManager::hardcoded_execute_filter(std::string query) {
+  std::string query_type = get_query_type(query);
   // Skip SET
   if(!query_type.compare("SET"))
     return false;
@@ -271,10 +279,6 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
           return true;
         }
 
-        std::vector<std::string> query_tokens;
-        boost::split(query_tokens, *query, boost::is_any_of(" "), boost::token_compress_on);
-        std::string query_type = query_tokens[0];
-
         std::vector<wiredb::ResType> results;
         std::vector<wiredb::FieldInfoType> rowdesc;
         std::string err_msg;
@@ -291,7 +295,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
 
         send_data_rows(results, rowdesc.size(), responses);
 
-        complete_command(query_type, rows_affected, responses);
+        complete_command(*query, rows_affected, responses);
       }
 
       // send_error_response({{'M', "Syntax error"}}, responses);
@@ -310,16 +314,12 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       LOG_INFO("Prep stmt: %s", prep_stmt_name.c_str());
       // Read query string
       std::string query = get_string_token(pkt);
-      LOG_INFO("Query: %s", query.c_str());
+      LOG_INFO("Parse Query: %s", query.c_str());
 
-      // Workaround to bypass SET, BEGIN, ROLLBACK and COMMIT
-      std::vector<std::string> query_tokens;
-      boost::split(query_tokens, query, boost::is_any_of(" "),
-                   boost::token_compress_on);
-      query_type = query_tokens[0];
       skipped_stmt_ = false;
-      if (!hardcoded_execute_filter()) {
+      if (!hardcoded_execute_filter(query)) {
         skipped_stmt_ = true;
+        skipped_query_ = query;
         LOG_INFO("Statement skipped");
         std::unique_ptr<Packet> response(new Packet());
         // Send Parse complete response
@@ -504,7 +504,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       // covers weird JDBC edge case of sending double BEGIN statements. Don't execute them
       if (skipped_stmt_) {
         LOG_INFO("Statement skipped");
-        complete_command(query_type, rows_affected, responses);
+        complete_command(skipped_query_, rows_affected, responses);
         break;
       }
 
@@ -522,7 +522,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
 
       put_row_desc(rowdesc, responses);
       send_data_rows(results, rowdesc.size(), responses);
-      complete_command(query_type, rows_affected, responses);
+      complete_command(portal->query_string, rows_affected, responses);
 
       break;
     }

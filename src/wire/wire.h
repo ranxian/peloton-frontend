@@ -61,9 +61,9 @@ class PacketManager {
   Client client;
 
   std::shared_ptr<CacheEntry> unnamed_entry;
-  std::string query_type;
   uchar txn_state;
   bool skipped_stmt_;
+  std::string skipped_query_;
 
   wiredb::Sqlite db;
 
@@ -89,7 +89,7 @@ class PacketManager {
 
   void make_hardcoded_parameter_status(ResponseBuffer& responses, const std::pair<std::string, std::string>& kv);
 
-  bool hardcoded_execute_filter();
+  bool hardcoded_execute_filter(std::string query);
 
   void close_client();
 
