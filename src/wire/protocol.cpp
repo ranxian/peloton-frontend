@@ -383,8 +383,10 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
 
       // Read parameter format
       int num_params_format = packet_getint(pkt, 2);
+
+      std::vector<int16_t> formats(num_params_format);
       for (int i = 0; i < num_params_format; i++) {
-        packet_getint(pkt, 2);
+        formats[i] = packet_getint(pkt, 2);
       }
 
       int num_params = packet_getint(pkt, 2);
@@ -396,11 +398,26 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       for (int i = 0; i < num_params; i++) {
         int param_len = packet_getint(pkt, 4);
         auto param = packet_getbytes(pkt, param_len);
-        std::string param_str = std::string(std::begin(param), std::end(param));
 
-        // TODO: Tricky workaround for sqlite: always treat as TEXT
-        bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
-        LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
+        if (formats[i] == 0) {
+          // TEXT mode
+          LOG_INFO("TEXT mode");
+          std::string param_str = std::string(std::begin(param),
+                                              std::end(param));
+          bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
+          LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
+        } else {
+          // BINARY mode
+          LOG_INFO("BINARY mode");
+          // TODO: Only support int in binary node now.
+          int int_val = 0;
+          for (int i = 0; i < 4; ++i) {
+            int_val = (int_val << 8) | param[i];
+          }
+          bind_parameters.push_back(std::make_pair(WIRE_INTEGER,
+                                                   std::to_string(int_val)));
+          LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
+        }
       }
 
       sqlite3_stmt *stmt = nullptr;
@@ -414,7 +431,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
           stmt = (*itr)->sql_stmt;
           query_string = (*itr)->query_string;
         } else {
-          // TODO: throw error here
+          // TODO: Should throw error here
         }
       }
 

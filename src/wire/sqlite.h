@@ -29,7 +29,7 @@ public:
     }
 
     // TODO: remove test
-     test();
+    //test();
   }
 
   virtual ~Sqlite() {
