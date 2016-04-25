@@ -138,7 +138,7 @@ void PacketManager::put_row_desc(std::vector<wiredb::FieldInfoType> &rowdesc, Re
   responses.push_back(std::move(pkt));
 }
 
-void PacketManager::send_data_rows(std::vector<wiredb::ResType> &results, int colcount, ResponseBuffer &responses) {
+void PacketManager::send_data_rows(std::vector<wiredb::ResType> &results, int colcount, int &rows_affected, ResponseBuffer &responses) {
   if (!results.size() || !colcount)
     return;
 
@@ -155,6 +155,7 @@ void PacketManager::send_data_rows(std::vector<wiredb::ResType> &results, int co
     }
     responses.push_back(std::move(pkt));
   }
+  rows_affected = numrows;
 }
 
 /*
@@ -236,7 +237,7 @@ void PacketManager::send_empty_query_response(ResponseBuffer& responses) {
 bool PacketManager::hardcoded_execute_filter(std::string query) {
   std::string query_type = get_query_type(query);
   // Skip SET
-  if(!query_type.compare("SET"))
+  if(query_type.compare("SET") == 0 || query_type.compare("SHOW") == 0)
     return false;
   // skip duplicate BEGIN
   if (!query_type.compare("BEGIN") && txn_state == TXN_BLOCK)
@@ -293,7 +294,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
 
         put_row_desc(rowdesc, responses);
 
-        send_data_rows(results, rowdesc.size(), responses);
+        send_data_rows(results, rowdesc.size(), rows_affected, responses);
 
         complete_command(*query, rows_affected, responses);
       }
@@ -382,6 +383,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
         break;
       }
 
+
       // Read parameter format
       int num_params_format = packet_getint(pkt, 2);
 
@@ -411,6 +413,19 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       }
       stmt = entry->sql_stmt;
       query_string = entry->query_string;
+
+      skipped_stmt_ = false;
+      if (!hardcoded_execute_filter(query_string)) {
+        skipped_stmt_ = true;
+        skipped_query_ = query_string;
+        LOG_INFO("Statement skipped: %s", skipped_query_.c_str());
+        std::unique_ptr<Packet> response(new Packet());
+        // Send Parse complete response
+        response->msg_type = '2';
+        responses.push_back(std::move(response));
+        break;
+      }
+
 
       std::vector<std::pair<int, std::string>> bind_parameters;
       for (int param_idx = 0; param_idx < num_params; param_idx++) {
@@ -503,8 +518,9 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
 
       // covers weird JDBC edge case of sending double BEGIN statements. Don't execute them
       if (skipped_stmt_) {
-        LOG_INFO("Statement skipped");
+        LOG_INFO("Statement skipped: %s", skipped_query_.c_str());
         complete_command(skipped_query_, rows_affected, responses);
+        skipped_stmt_ = false;
         break;
       }
 
@@ -521,7 +537,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       }
 
       put_row_desc(rowdesc, responses);
-      send_data_rows(results, rowdesc.size(), responses);
+      send_data_rows(results, rowdesc.size(), rows_affected, responses);
       complete_command(portal->query_string, rows_affected, responses);
 
       break;

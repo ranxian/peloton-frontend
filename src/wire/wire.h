@@ -79,7 +79,7 @@ class PacketManager {
 
   void put_row_desc(std::vector<wiredb::FieldInfoType>& rowdesc, ResponseBuffer& responses);
 
-  void send_data_rows(std::vector<wiredb::ResType>& results, int colcount, ResponseBuffer& responses);
+  void send_data_rows(std::vector<wiredb::ResType>& results, int colcount, int &rows_affected,  ResponseBuffer& responses);
 
   void put_dummy_data_row(int colcount, int start, ResponseBuffer& responses);
 
