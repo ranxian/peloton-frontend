@@ -12,8 +12,8 @@ public class PelotonTest {
 
   private final String DROP = "DROP TABLE IF EXISTS A;" +
           "DROP TABLE IF EXISTS B;";
-  private final String DDL = "CREATE TABLE A (id INT PRIMARY KEY, data TEXT);" +
-          "CREATE TABLE B (id INT PRIMARY KEY, data TEXT);";
+  private final String DDL = "CREATE TABLE A (id REAL PRIMARY KEY, data TEXT);" +
+          "CREATE TABLE B (id REAL PRIMARY KEY, data TEXT);";
 
   private final String INSERT_A = "INSERT INTO A VALUES (?,?)";
   private final String INSERT_B = "INSERT INTO B VALUES (?,?)";
@@ -118,8 +118,8 @@ public class PelotonTest {
       System.out.println("Loop id:"+ 0);
       String data1 = "Ming says hello world and id = " + i;
       String data2 = "Joy says hello world and id = " + i;
-      stmt.setInt(1, i);
-      stmt.setInt(3, i);
+      stmt.setDouble(1, i / 0.3);
+      stmt.setDouble(3, i / 0.3);
       stmt.setString(2, data1);
       stmt.setString(4, data2);
       try {

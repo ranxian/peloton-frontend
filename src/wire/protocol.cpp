@@ -6,6 +6,7 @@
 #include "cache.h"
 #include "portal.h"
 #include "cache_entry.h"
+#include "types.h"
 #include <stdio.h>
 #include <boost/algorithm/string.hpp>
 #include <unordered_map>
@@ -394,12 +395,29 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
         // TODO: Should throw error here.
       }
 
+      // Get statement info generated in PARSE message
+      sqlite3_stmt *stmt = nullptr;
+      std::string query_string;
+      std::shared_ptr<CacheEntry> entry;
+      if (prep_stmt_name.empty()) {
+        entry = unnamed_entry;
+      } else {
+        auto itr = cache_.find(prep_stmt_name);
+        if (itr != cache_.end()) {
+          entry = *itr;
+        } else {
+          // TODO: Should throw error here
+        }
+      }
+      stmt = entry->sql_stmt;
+      query_string = entry->query_string;
+
       std::vector<std::pair<int, std::string>> bind_parameters;
-      for (int i = 0; i < num_params; i++) {
+      for (int param_idx = 0; param_idx < num_params; param_idx++) {
         int param_len = packet_getint(pkt, 4);
         auto param = packet_getbytes(pkt, param_len);
 
-        if (formats[i] == 0) {
+        if (formats[param_idx] == 0) {
           // TEXT mode
           LOG_INFO("TEXT mode");
           std::string param_str = std::string(std::begin(param),
@@ -409,29 +427,27 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
         } else {
           // BINARY mode
           LOG_INFO("BINARY mode");
-          // TODO: Only support int in binary node now.
-          int int_val = 0;
-          for (int i = 0; i < 4; ++i) {
-            int_val = (int_val << 8) | param[i];
+          switch (entry->param_types[param_idx]) {
+            case POSTGRES_VALUE_TYPE_INTEGER: {
+              int int_val = 0;
+              for (int i = 0; i < 4; ++i) {
+                int_val = (int_val << 8) | param[i];
+              }
+              bind_parameters.push_back(
+                  std::make_pair(WIRE_INTEGER, std::to_string(int_val)));
+              LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
+            } break;
+            case POSTGRES_VALUE_TYPE_DOUBLE: {
+              int float_val = 0;
+              // TODO: read float val
+              bind_parameters.push_back(
+                  std::make_pair(WIRE_FLOAT, std::to_string(float_val)));
+            } break;
+            default: {
+              LOG_ERROR("Do not support data type: %d",
+                        entry->param_types[param_idx]);
+            } break;
           }
-          bind_parameters.push_back(std::make_pair(WIRE_INTEGER,
-                                                   std::to_string(int_val)));
-          LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
-        }
-      }
-
-      sqlite3_stmt *stmt = nullptr;
-      std::string query_string;
-      if (prep_stmt_name.empty()) {
-        stmt = unnamed_entry->sql_stmt;
-        query_string = unnamed_entry->query_string;
-      } else {
-        auto itr = cache_.find(prep_stmt_name);
-        if (itr != cache_.end()) {
-          stmt = (*itr)->sql_stmt;
-          query_string = (*itr)->query_string;
-        } else {
-          // TODO: Should throw error here
         }
       }
 
