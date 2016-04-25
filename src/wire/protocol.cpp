@@ -430,7 +430,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
           switch (entry->param_types[param_idx]) {
             case POSTGRES_VALUE_TYPE_INTEGER: {
               int int_val = 0;
-              for (int i = 0; i < 4; ++i) {
+              for (size_t i = 0; i < sizeof(int); ++i) {
                 int_val = (int_val << 8) | param[i];
               }
               bind_parameters.push_back(
@@ -438,10 +438,16 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
               LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
             } break;
             case POSTGRES_VALUE_TYPE_DOUBLE: {
-              int float_val = 0;
+              double float_val = 0;
+              unsigned long buf = 0;
+              for (size_t i = 0; i < sizeof(double); ++i) {
+                buf = (buf << 8) | param[i];
+              }
+              memcpy(&float_val, &buf, sizeof(double));
               // TODO: read float val
               bind_parameters.push_back(
                   std::make_pair(WIRE_FLOAT, std::to_string(float_val)));
+              LOG_INFO("Bind param (size: %d) : %lf", param_len, float_val);
             } break;
             default: {
               LOG_ERROR("Do not support data type: %d",
