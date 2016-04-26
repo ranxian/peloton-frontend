@@ -138,7 +138,10 @@ void PacketManager::put_row_desc(std::vector<wiredb::FieldInfoType> &rowdesc, Re
   responses.push_back(std::move(pkt));
 }
 
-void PacketManager::send_data_rows(std::vector<wiredb::ResType> &results, int colcount, int &rows_affected, ResponseBuffer &responses) {
+void PacketManager::send_data_rows(std::vector<wiredb::ResType> &results,
+                                   int colcount,
+                                   int &rows_affected,
+                                   ResponseBuffer &responses) {
   if (!results.size() || !colcount)
     return;
 
@@ -156,6 +159,7 @@ void PacketManager::send_data_rows(std::vector<wiredb::ResType> &results, int co
     responses.push_back(std::move(pkt));
   }
   rows_affected = numrows;
+  LOG_INFO("Rows affected: %d", rows_affected);
 }
 
 /*

@@ -134,8 +134,39 @@ public:
     LOG_INFO("Executing statement......................");
     auto sql_stmt = (sqlite3_stmt *)stmt;
     auto ret = sqlite3_step(sql_stmt);
+    LOG_INFO("ret: %d", ret);
     auto col_num = sqlite3_column_count(sql_stmt);
-    int first = true;
+    LOG_INFO("column count: %d", col_num);
+
+    for (int i = 0; i < col_num; i++) {
+      int t = sqlite3_column_type(sql_stmt, i);
+      const char *name = sqlite3_column_name(sql_stmt, i);
+      LOG_INFO("name: %s", name);
+      switch (t) {
+        case SQLITE_INTEGER: {
+          LOG_INFO("col int");
+          info.push_back(std::make_tuple(name, 23, 4));
+          break;
+        }
+        case SQLITE_FLOAT: {
+          LOG_INFO("col float");
+          info.push_back(std::make_tuple(name, 701, 8));
+          break;
+        }
+        case SQLITE_TEXT: {
+          LOG_INFO("col text");
+          info.push_back(std::make_tuple(name, 25, 255));
+          break;
+        }
+        default: {
+          // Workaround for empty results, should still return something
+          LOG_ERROR("Unrecognized column type: %d", t);
+          info.push_back(std::make_tuple(name, 25, 255));
+          break;
+          break;
+        }
+      }
+    }
     while (ret == SQLITE_ROW) {
       for (int i = 0; i < col_num; i++) {
         int t = sqlite3_column_type(sql_stmt, i);
@@ -145,32 +176,25 @@ public:
           case SQLITE_INTEGER: {
             int v = sqlite3_column_int(sql_stmt, i);
             value = std::to_string(v);
-            if(first)
-              info.push_back(std::make_tuple(name, 23, 4));
             break;
           }
           case SQLITE_FLOAT: {
-            float v = (float)sqlite3_column_double(sql_stmt, i);
-            if(first)
-              info.push_back(std::make_tuple(name, 700, 4));
+            double v = (double) sqlite3_column_double(sql_stmt, i);
             value = std::to_string(v);
             break;
           }
           case SQLITE_TEXT: {
             const char *v = (char *)sqlite3_column_text(sql_stmt, i);
-            if(first)
-              info.push_back(std::make_tuple(name, 25, 255));
             value = std::string(v);
             break;
           }
           default: break;
         }
         res.push_back(ResType());
-        LOG_INFO("res from exeStmt %s %s\n", name, value.c_str());
+        //LOG_INFO("res from exeStmt %s %s\n", name, value.c_str());
         copyFromTo(name, res.back().first);
         copyFromTo(value.c_str(), res.back().second);
       }
-      first = false;
       ret = sqlite3_step(sql_stmt);
     }
 
@@ -245,11 +269,11 @@ private:
     if (src == nullptr) {
       return;
     }
-    LOG_INFO("ENTER: strlen: %zu", strlen(src));
+    //LOG_INFO("ENTER: strlen: %zu", strlen(src));
     for(unsigned int i = 0; i < strlen(src); i++){
       dst.push_back((unsigned char)src[i]);
     }
-    LOG_INFO("EXIT: strlen: %zu", strlen(src));
+    //LOG_INFO("EXIT: strlen: %zu", strlen(src));
   }
 
   static int execCallback(void *res, int argc, char **argv, char **azColName){
