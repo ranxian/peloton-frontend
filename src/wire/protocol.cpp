@@ -516,6 +516,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
     case 'D': {
       LOG_INFO("DESCRIBE message");
       auto mode = packet_getbytes(pkt, 1);
+      LOG_INFO("mode %c", mode[0]);
 
       std::string name = get_string_token(pkt);
       LOG_INFO("name: %s", name.c_str());
@@ -523,6 +524,9 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
         auto portal_itr = portals_.find(name);
         if (portal_itr == portals_.end()) {
           // TODO: error handling here
+          std::vector<wiredb::FieldInfoType> rowdesc;
+          put_row_desc(rowdesc, responses);
+          break;
         }
         std::shared_ptr<Portal> p = portal_itr->second;
         db.GetRowDesc(p->stmt, p->rowdesc);
