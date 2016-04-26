@@ -47,7 +47,8 @@ public:
     LOG_INFO("receive %s", query);
     sqlite3_stmt *sql_stmt;
     sqlite3_prepare_v2(db, query, -1, &sql_stmt, NULL);
-    return ExecPrepStmt(sql_stmt, res, info, rows_change, err_msg);
+    GetRowDesc(sql_stmt, info);
+    return ExecPrepStmt(sql_stmt, true, res, rows_change, err_msg);
   }
 /*
 
@@ -126,18 +127,11 @@ public:
   }
 
   /*
-   * ExecPrepStmt - Execute a statement from a prepared and bound statement
+   * GetRowDesc - Get RowDescription of a query
    */
-  int ExecPrepStmt(void *stmt, std::vector<ResType> &res,
-                   std::vector<FieldInfoType> &info, int &rows_change,
-                   std::string &err_msg) {
-    LOG_INFO("Executing statement......................");
+  void GetRowDesc(void *stmt, std::vector<FieldInfoType> &info) {
     auto sql_stmt = (sqlite3_stmt *)stmt;
-    auto ret = sqlite3_step(sql_stmt);
-    LOG_INFO("ret: %d", ret);
     auto col_num = sqlite3_column_count(sql_stmt);
-    LOG_INFO("column count: %d", col_num);
-
     for (int i = 0; i < col_num; i++) {
       int t = sqlite3_column_type(sql_stmt, i);
       const char *name = sqlite3_column_name(sql_stmt, i);
@@ -163,10 +157,24 @@ public:
           LOG_ERROR("Unrecognized column type: %d", t);
           info.push_back(std::make_tuple(name, 25, 255));
           break;
-          break;
         }
       }
     }
+  }
+
+  /*
+   * ExecPrepStmt - Execute a statement from a prepared and bound statement
+   */
+  int ExecPrepStmt(void *stmt, bool unnamed, std::vector<ResType> &res,
+                   int &rows_change,
+                   std::string &err_msg) {
+    LOG_INFO("Executing statement......................");
+    auto sql_stmt = (sqlite3_stmt *)stmt;
+    auto ret = sqlite3_step(sql_stmt);
+    LOG_INFO("ret: %d", ret);
+    auto col_num = sqlite3_column_count(sql_stmt);
+    LOG_INFO("column count: %d", col_num);
+
     while (ret == SQLITE_ROW) {
       for (int i = 0; i < col_num; i++) {
         int t = sqlite3_column_type(sql_stmt, i);
@@ -184,21 +192,25 @@ public:
             break;
           }
           case SQLITE_TEXT: {
-            const char *v = (char *)sqlite3_column_text(sql_stmt, i);
+            const char *v = (char *) sqlite3_column_text(sql_stmt, i);
             value = std::string(v);
             break;
           }
           default: break;
         }
+        // TODO: refactor this
         res.push_back(ResType());
-        //LOG_INFO("res from exeStmt %s %s\n", name, value.c_str());
+        //LOG_INFO("res from exeStmt %s %s", name, value.c_str());
         copyFromTo(name, res.back().first);
         copyFromTo(value.c_str(), res.back().second);
       }
       ret = sqlite3_step(sql_stmt);
     }
 
-    sqlite3_reset(sql_stmt);
+    if (unnamed)
+      sqlite3_finalize(sql_stmt);
+    else
+      sqlite3_reset(sql_stmt);
     sqlite3_db_release_memory(db);
     // sql_stmt = nullptr;
     if (ret != SQLITE_DONE) {
@@ -237,9 +249,11 @@ private:
     sqlite3_stmt *s;
     PrepareStmt("insert into AA (id, data) values ( ?, ? )", &s, err);
     BindStmt(parameters, &s, err);
-    ExecPrepStmt(s, res, info, rows, err);
+    GetRowDesc(s, info);
+    ExecPrepStmt(s, false, res, rows, err);
     BindStmt(parameters, &s, err);
-    ExecPrepStmt(s, res, info, rows, err);
+    GetRowDesc(s, info);
+    ExecPrepStmt(s, false, res, rows, err);
     res.clear();
 
     // select all
@@ -247,7 +261,8 @@ private:
     sqlite3_prepare_v2(db, "select * from AA;", -1, &sql_stmt, NULL);
     res.clear();
     info.clear();
-    ExecPrepStmt(sql_stmt, res, info, rows, err);
+    GetRowDesc(s, info);
+    ExecPrepStmt(sql_stmt, false, res, rows, err);
 
     // res.size() should be 4
     // info.size() should be 2

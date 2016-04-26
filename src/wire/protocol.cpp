@@ -121,18 +121,25 @@ void PacketManager::put_row_desc(std::vector<wiredb::FieldInfoType> &rowdesc, Re
   if (!rowdesc.size())
     return;
 
+  LOG_INFO("Put RowDescription");
   std::unique_ptr<Packet> pkt(new Packet());
   pkt->msg_type = 'T';
   packet_putint(pkt, rowdesc.size(), 2);
 
-  for(auto col : rowdesc) {
+  for (auto col : rowdesc) {
+    LOG_INFO("column name: %s", std::get<0>(col).c_str());
     packet_putstring(pkt, std::get<0>(col));
+    // TODO: Table Oid (int32)
     packet_putint(pkt, 0, 4);
+    // TODO: Attr id of column (int16)
     packet_putint(pkt, 0, 2);
+    // Field data type (int32)
     packet_putint(pkt, std::get<1>(col), 4);
+    // Data type size (int16)
     packet_putint(pkt, std::get<2>(col), 2);
+    // Type modifier (int32)
     packet_putint(pkt, -1, 4);
-    // format code for text
+    // Format code for text
     packet_putint(pkt, 0, 2);
   }
   responses.push_back(std::move(pkt));
@@ -145,10 +152,11 @@ void PacketManager::send_data_rows(std::vector<wiredb::ResType> &results,
   if (!results.size() || !colcount)
     return;
 
+  LOG_INFO("Flatten result size: %lu", results.size());
   size_t numrows = results.size() / colcount;
 
   // 1 packet per row
-  for(size_t i = 0; i < numrows; i++) {
+  for (size_t i = 0; i < numrows; i++) {
     std::unique_ptr<Packet> pkt(new Packet());
     pkt->msg_type = 'D';
     packet_putint(pkt, colcount, 2);
@@ -224,6 +232,7 @@ void PacketManager::complete_command(std::string &query, int rows, ResponseBuffe
     txn_state = TXN_IDLE;
   else
     tag += " " + std::to_string(rows);
+  LOG_INFO("complete command tag: %s", tag.c_str());
   packet_putstring(pkt, tag);
 
   responses.push_back(std::move(pkt));
@@ -387,7 +396,6 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
         break;
       }
 
-
       // Read parameter format
       int num_params_format = packet_getint(pkt, 2);
 
@@ -406,6 +414,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       std::string query_string;
       std::shared_ptr<CacheEntry> entry;
       if (prep_stmt_name.empty()) {
+        LOG_INFO("Unnamed statement");
         entry = unnamed_entry;
       } else {
         auto itr = cache_.find(prep_stmt_name);
@@ -486,6 +495,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       std::shared_ptr<Portal> portal(new Portal());
       portal->query_string = std::move(query_string);
       portal->stmt = stmt;
+      portal->prep_stmt_name = prep_stmt_name;
       portal->portal_name = std::move(portal_name);
 
       auto itr = portals_.find(portal_name);
@@ -504,9 +514,24 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
     }
 
     case 'D': {
+      LOG_INFO("DESCRIBE message");
       auto mode = packet_getbytes(pkt, 1);
 
-      LOG_INFO("CASE D reached. DO nothing");
+      std::string name = get_string_token(pkt);
+      LOG_INFO("name: %s", name.c_str());
+      if (mode[0] == 'P') {
+        auto portal_itr = portals_.find(name);
+        if (portal_itr == portals_.end()) {
+          // TODO: error handling here
+        }
+        std::shared_ptr<Portal> p = portal_itr->second;
+        db.GetRowDesc(p->stmt, p->rowdesc);
+        put_row_desc(p->rowdesc, responses);
+      } else if (mode[0] == 'S') {
+        // TODO: need to handle this case
+      } else {
+        // TODO: error handling here
+      }
       break;
     }
 
@@ -514,7 +539,6 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       // EXECUTE message
       LOG_INFO("EXECUTE message");
       std::vector<wiredb::ResType> results;
-      std::vector<wiredb::FieldInfoType> rowdesc;
       std::string err_msg;
       sqlite3_stmt *stmt = nullptr;
       int rows_affected = 0, is_failed;
@@ -532,16 +556,18 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       stmt = portal->stmt;
       ASSERT(stmt != nullptr);
 
+      bool unnamed = portal->prep_stmt_name.empty();
+
       LOG_INFO("Executing query: %s", portal->query_string.c_str());
-      is_failed = db.ExecPrepStmt(stmt, results, rowdesc, rows_affected,
-                                  err_msg);
+      is_failed = db.ExecPrepStmt(stmt, unnamed, results, rows_affected, err_msg);
       if (is_failed) {
+        LOG_INFO("Failed to execute: %s", err_msg.c_str());
         send_error_response({{'M', err_msg}}, responses);
         send_ready_for_query(txn_state, responses);
       }
 
-      put_row_desc(rowdesc, responses);
-      send_data_rows(results, rowdesc.size(), rows_affected, responses);
+      //put_row_desc(portal->rowdesc, responses);
+      send_data_rows(results, results.size(), rows_affected, responses);
       complete_command(portal->query_string, rows_affected, responses);
 
       break;
@@ -610,7 +636,7 @@ void PacketManager::manage_packets() {
     return;
   }
 
-  print_packet(&pkt);
+  //print_packet(&pkt);
   status = process_startup_packet(&pkt, responses);
   if (!write_packets(responses, &client) || !status) {
     // close client on write failure or status failure
@@ -620,7 +646,7 @@ void PacketManager::manage_packets() {
 
   pkt.reset();
   while (read_packet(&pkt, true, &client)) {
-    print_packet(&pkt);
+    //print_packet(&pkt);
     status = process_packet(&pkt, responses);
     if (!write_packets(responses, &client) || !status) {
       // close client on write failure or status failure
