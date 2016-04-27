@@ -91,6 +91,8 @@ class PacketManager {
 
   bool hardcoded_execute_filter(std::string query);
 
+  void exec_query_message(Packet *pkt, ResponseBuffer &responses);
+
   void exec_parse_message(Packet *pkt, ResponseBuffer &responses);
 
   void exec_bind_message(Packet *pkt, ResponseBuffer &responses);

@@ -57,7 +57,9 @@ void print_uchar_vector(std::vector<uchar>& vec UNUSED) {
 void PacketManager::close_client() { client.sock->close_socket(); }
 
 
-void PacketManager::make_hardcoded_parameter_status(ResponseBuffer &responses, const std::pair<std::string, std::string>& kv) {
+void PacketManager::make_hardcoded_parameter_status(
+    ResponseBuffer &responses,
+    const std::pair<std::string, std::string>& kv) {
   std::unique_ptr<Packet> response(new Packet());
   response->msg_type = 'S';
   packet_putstring(response, kv.first);
@@ -261,6 +263,51 @@ bool PacketManager::hardcoded_execute_filter(std::string query) {
   if (!query_type.compare("ROLLBACK") && txn_state == TXN_IDLE)
     return false;
   return true;
+}
+
+void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
+  std::string q_str = packet_getstring(pkt, pkt->len);
+  LOG_INFO("Query Received: %s \n", q_str.c_str());
+
+  std::vector<std::string> queries;
+  boost::split(queries, q_str, boost::is_any_of(";"));
+
+  // just a ';' sent
+  if (queries.size() == 1) {
+    send_empty_query_response(responses);
+    send_ready_for_query(txn_state, responses);
+    return;
+  }
+
+  // iterate till before the trivial string after the last ';'
+  for (auto query = queries.begin(); query != queries.end() - 1; query++) {
+    if (query->empty()) {
+      send_empty_query_response(responses);
+      send_ready_for_query(TXN_IDLE, responses);
+      return;
+    }
+
+    std::vector<wiredb::ResType> results;
+    std::vector<wiredb::FieldInfoType> rowdesc;
+    std::string err_msg;
+    int rows_affected;
+
+    int isfailed =  db.PortalExec(query->c_str(), results, rowdesc, rows_affected, err_msg);
+
+    if(isfailed) {
+      send_error_response({{'M', err_msg}}, responses);
+      break;
+    }
+
+    put_row_desc(rowdesc, responses);
+
+    send_data_rows(results, rowdesc.size(), rows_affected, responses);
+
+    complete_command(*query, rows_affected, responses);
+  }
+
+  // send_error_response({{'M', "Syntax error"}}, responses);
+  send_ready_for_query('I', responses);
 }
 
 /*
@@ -526,86 +573,33 @@ void PacketManager::exec_execute_message(Packet *pkt,
  *  Returns false if the seesion needs to be closed.
  */
 bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
-
   switch (pkt->msg_type) {
     case 'Q': {
-      std::string q_str = packet_getstring(pkt, pkt->len);
-      LOG_INFO("Query Received: %s \n", q_str.c_str());
-
-      std::vector<std::string> queries;
-      boost::split(queries, q_str, boost::is_any_of(";"));
-
-      // just a ';' sent
-      if (queries.size() == 1) {
-        send_empty_query_response(responses);
-        send_ready_for_query(txn_state, responses);
-        return true;
-      }
-
-      // iterate till before the trivial string after the last ';'
-      for (auto query = queries.begin(); query != queries.end() - 1; query++) {
-        if (query->empty()) {
-          send_empty_query_response(responses);
-          send_ready_for_query(TXN_IDLE, responses);
-          return true;
-        }
-
-        std::vector<wiredb::ResType> results;
-        std::vector<wiredb::FieldInfoType> rowdesc;
-        std::string err_msg;
-        int rows_affected;
-
-        int isfailed =  db.PortalExec(query->c_str(), results, rowdesc, rows_affected, err_msg);
-
-        if(isfailed) {
-          send_error_response({{'M', err_msg}}, responses);
-          break;
-        }
-
-        put_row_desc(rowdesc, responses);
-
-        send_data_rows(results, rowdesc.size(), rows_affected, responses);
-
-        complete_command(*query, rows_affected, responses);
-      }
-
-      // send_error_response({{'M', "Syntax error"}}, responses);
-      send_ready_for_query('I', responses);
-      break;
-    }
-
+      exec_query_message(pkt, responses);
+    } break;
     case 'P': {
       exec_parse_message(pkt, responses);
-      break;
-    }
-
+    } break;
     case 'B': {
       exec_bind_message(pkt, responses);
-      break;
-    }
-
+    } break;
     case 'D': {
       exec_describe_message(pkt, responses);
-      break;
-    }
-
+    } break;
     case 'E': {
       exec_execute_message(pkt, responses);
-      break;
-    }
-
+    } break;
     case 'S': {
       // SYNC message
       send_ready_for_query(txn_state, responses);
-      break;
-    }
-
-    case 'X':
+    } break;
+    case 'X': {
       LOG_INFO("Closing client");
       return false;
-
-    default:
+    } break;
+    default: {
       LOG_INFO("Packet type not supported yet: %d (%c)", pkt->msg_type, pkt->msg_type);
+    }
   }
   return true;
 }
