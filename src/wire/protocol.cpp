@@ -17,7 +17,6 @@ namespace peloton {
 namespace wire {
 
 thread_local Cache<std::string, CacheEntry> cache_;
-  // TODO: Should be replaced by dedicated class
 thread_local std::unordered_map<std::string, std::shared_ptr<Portal>> portals_;
 
 const std::unordered_map<std::string, std::string> PacketManager::parameter_status_map =
@@ -44,12 +43,12 @@ void print_packet(Packet* pkt UNUSED) {
   //LOG_INFO("}\n");
 }
 
-void print_uchar_vector(std::vector<uchar>& vec){
-  LOG_INFO("{");
-  for (auto ele : vec) {
-    LOG_INFO("%d (%c)", ele, ele);
-  }
-  LOG_INFO("}\n");
+void print_uchar_vector(std::vector<uchar>& vec UNUSED) {
+  //LOG_INFO("{");
+  //for (auto ele : vec) {
+    //LOG_INFO("%d (%c)", ele, ele);
+  //}
+  //LOG_INFO("}\n");
 }
 
 /*
@@ -239,8 +238,8 @@ void PacketManager::complete_command(std::string &query, int rows, ResponseBuffe
 }
 
 /*
-* put_empty_query_response - Informs the client that an empty query was sent
-*/
+ * put_empty_query_response - Informs the client that an empty query was sent
+ */
 void PacketManager::send_empty_query_response(ResponseBuffer& responses) {
   std::unique_ptr<Packet> response(new Packet());
   response->msg_type = 'I';
@@ -262,6 +261,264 @@ bool PacketManager::hardcoded_execute_filter(std::string query) {
   if (!query_type.compare("ROLLBACK") && txn_state == TXN_IDLE)
     return false;
   return true;
+}
+
+/*
+ * exec_parse_message - handle PARSE message
+ */
+void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
+  LOG_INFO("PARSE message");
+  std::string err_msg;
+  std::string prep_stmt_name = get_string_token(pkt);
+
+  // Read prepare statement name
+  sqlite3_stmt *stmt = nullptr;
+  LOG_INFO("Prep stmt: %s", prep_stmt_name.c_str());
+  // Read query string
+  std::string query = get_string_token(pkt);
+  LOG_INFO("Parse Query: %s", query.c_str());
+
+  skipped_stmt_ = false;
+  if (!hardcoded_execute_filter(query)) {
+    skipped_stmt_ = true;
+    skipped_query_ = query;
+    LOG_INFO("Statement skipped");
+    std::unique_ptr<Packet> response(new Packet());
+    // Send Parse complete response
+    response->msg_type = '1';
+    responses.push_back(std::move(response));
+    return;
+  }
+
+  // Read number of params
+  int num_params = packet_getint(pkt, 2);
+  LOG_INFO("NumParams: %d", num_params);
+
+  // Read param types
+  std::vector<int32_t> param_types(num_params);
+  for (int i = 0; i < num_params; i++) {
+    int param_type = packet_getint(pkt, 4);
+    param_types[i] = param_type;
+  }
+
+  // Prepare statement
+  bool is_failed = db.PrepareStmt(query.c_str(), &stmt, err_msg);
+  if (is_failed) {
+    send_error_response({{'M', err_msg}}, responses);
+    send_ready_for_query(txn_state, responses);
+  }
+  std::shared_ptr<CacheEntry> entry(new CacheEntry());
+  entry->stmt_name = prep_stmt_name;
+  entry->query_string = query;
+  entry->sql_stmt = stmt;
+  entry->param_types = std::move(param_types);
+
+  if (prep_stmt_name.empty()) {
+    // Unnamed statement
+    unnamed_entry = entry;
+  } else {
+    cache_.insert(std::make_pair(std::move(prep_stmt_name), entry));
+  }
+
+  std::unique_ptr<Packet> response(new Packet());
+
+  // Send Parse complete response
+  response->msg_type = '1';
+  responses.push_back(std::move(response));
+}
+
+void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
+  // BIND message
+  LOG_INFO("BIND message");
+  std::string portal_name = get_string_token(pkt);
+  LOG_INFO("Portal name: %s", portal_name.c_str());
+  std::string prep_stmt_name = get_string_token(pkt);
+  LOG_INFO("Prep stmt name: %s", prep_stmt_name.c_str());
+
+  if (skipped_stmt_) {
+    //send bind complete
+    std::unique_ptr<Packet> response(new Packet());
+    response->msg_type = '2';
+    responses.push_back(std::move(response));
+    return;
+  }
+
+  // Read parameter format
+  int num_params_format = packet_getint(pkt, 2);
+
+  std::vector<int16_t> formats(num_params_format);
+  for (int i = 0; i < num_params_format; i++) {
+    formats[i] = packet_getint(pkt, 2);
+  }
+
+  int num_params = packet_getint(pkt, 2);
+  if (num_params_format != num_params) {
+    // TODO: Should throw error here.
+  }
+
+  // Get statement info generated in PARSE message
+  sqlite3_stmt *stmt = nullptr;
+  std::string query_string;
+  std::shared_ptr<CacheEntry> entry;
+  if (prep_stmt_name.empty()) {
+    LOG_INFO("Unnamed statement");
+    entry = unnamed_entry;
+  } else {
+    auto itr = cache_.find(prep_stmt_name);
+    if (itr != cache_.end()) {
+      entry = *itr;
+    } else {
+      // TODO: Should throw error here
+    }
+  }
+  stmt = entry->sql_stmt;
+  query_string = entry->query_string;
+
+  skipped_stmt_ = false;
+  if (!hardcoded_execute_filter(query_string)) {
+    skipped_stmt_ = true;
+    skipped_query_ = query_string;
+    LOG_INFO("Statement skipped: %s", skipped_query_.c_str());
+    std::unique_ptr<Packet> response(new Packet());
+    // Send Parse complete response
+    response->msg_type = '2';
+    responses.push_back(std::move(response));
+    return;
+  }
+
+  std::vector<std::pair<int, std::string>> bind_parameters;
+  for (int param_idx = 0; param_idx < num_params; param_idx++) {
+    int param_len = packet_getint(pkt, 4);
+    auto param = packet_getbytes(pkt, param_len);
+
+    if (formats[param_idx] == 0) {
+      // TEXT mode
+      LOG_INFO("TEXT mode");
+      std::string param_str = std::string(std::begin(param),
+          std::end(param));
+      bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
+      LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
+    } else {
+      // BINARY mode
+      LOG_INFO("BINARY mode");
+      switch (entry->param_types[param_idx]) {
+        case POSTGRES_VALUE_TYPE_INTEGER: {
+          int int_val = 0;
+          for (size_t i = 0; i < sizeof(int); ++i) {
+            int_val = (int_val << 8) | param[i];
+          }
+          bind_parameters.push_back(
+              std::make_pair(WIRE_INTEGER, std::to_string(int_val)));
+          LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
+        } break;
+        case POSTGRES_VALUE_TYPE_DOUBLE: {
+          double float_val = 0;
+          unsigned long buf = 0;
+          for (size_t i = 0; i < sizeof(double); ++i) {
+            buf = (buf << 8) | param[i];
+          }
+          memcpy(&float_val, &buf, sizeof(double));
+          // TODO: read float val
+          bind_parameters.push_back(
+              std::make_pair(WIRE_FLOAT, std::to_string(float_val)));
+          LOG_INFO("Bind param (size: %d) : %lf", param_len, float_val);
+        } break;
+        default: {
+          LOG_ERROR("Do not support data type: %d",
+              entry->param_types[param_idx]);
+        } break;
+      }
+    }
+  }
+
+  std::string err_msg;
+  bool is_failed = db.BindStmt(bind_parameters, &stmt, err_msg);
+  if (is_failed) {
+    send_error_response({{'M', err_msg}}, responses);
+    send_ready_for_query(txn_state, responses);
+  }
+
+  std::shared_ptr<Portal> portal(new Portal());
+  portal->query_string = std::move(query_string);
+  portal->stmt = stmt;
+  portal->prep_stmt_name = prep_stmt_name;
+  portal->portal_name = std::move(portal_name);
+
+  auto itr = portals_.find(portal_name);
+  if (portals_.find(portal_name) == portals_.end()) {
+    portals_.insert(std::make_pair(portal_name, portal));
+  } else {
+    std::shared_ptr<Portal> p = itr->second;
+    itr->second = portal;
+  }
+
+  //send bind complete
+  std::unique_ptr<Packet> response(new Packet());
+  response->msg_type = '2';
+  responses.push_back(std::move(response));
+}
+
+void PacketManager::exec_describe_message(Packet *pkt,
+                                          ResponseBuffer &responses) {
+  LOG_INFO("DESCRIBE message");
+  auto mode = packet_getbytes(pkt, 1);
+  LOG_INFO("mode %c", mode[0]);
+
+  std::string name = get_string_token(pkt);
+  LOG_INFO("name: %s", name.c_str());
+  if (mode[0] == 'P') {
+    auto portal_itr = portals_.find(name);
+    if (portal_itr == portals_.end()) {
+      // TODO: error handling here
+      std::vector<wiredb::FieldInfoType> rowdesc;
+      put_row_desc(rowdesc, responses);
+      return;
+    }
+    std::shared_ptr<Portal> p = portal_itr->second;
+    db.GetRowDesc(p->stmt, p->rowdesc);
+    put_row_desc(p->rowdesc, responses);
+  } else if (mode[0] == 'S') {
+    // TODO: need to handle this case
+  } else {
+    // TODO: error handling here
+  }
+}
+
+void PacketManager::exec_execute_message(Packet *pkt,
+                                         ResponseBuffer &responses) {
+  // EXECUTE message
+  LOG_INFO("EXECUTE message");
+  std::vector<wiredb::ResType> results;
+  std::string err_msg;
+  sqlite3_stmt *stmt = nullptr;
+  int rows_affected = 0, is_failed;
+  std::string portal_name = get_string_token(pkt);
+
+  // covers weird JDBC edge case of sending double BEGIN statements. Don't execute them
+  if (skipped_stmt_) {
+    LOG_INFO("Statement skipped: %s", skipped_query_.c_str());
+    complete_command(skipped_query_, rows_affected, responses);
+    skipped_stmt_ = false;
+    return;
+  }
+
+  auto portal = portals_[portal_name];
+  stmt = portal->stmt;
+  ASSERT(stmt != nullptr);
+
+  bool unnamed = portal->prep_stmt_name.empty();
+
+  LOG_INFO("Executing query: %s", portal->query_string.c_str());
+  is_failed = db.ExecPrepStmt(stmt, unnamed, results, rows_affected, err_msg);
+  if (is_failed) {
+    LOG_INFO("Failed to execute: %s", err_msg.c_str());
+    send_error_response({{'M', err_msg}}, responses);
+    send_ready_for_query(txn_state, responses);
+  }
+
+  //put_row_desc(portal->rowdesc, responses);
+  send_data_rows(results, results.size(), rows_affected, responses);
+  complete_command(portal->query_string, rows_affected, responses);
 }
 
 /*
@@ -318,262 +575,22 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
     }
 
     case 'P': {
-      // PARSE message
-      LOG_INFO("PARSE message");
-      std::string err_msg;
-      std::string prep_stmt_name = get_string_token(pkt);
-
-      // Read prepare statement name
-      sqlite3_stmt *stmt = nullptr;
-      LOG_INFO("Prep stmt: %s", prep_stmt_name.c_str());
-      // Read query string
-      std::string query = get_string_token(pkt);
-      LOG_INFO("Parse Query: %s", query.c_str());
-
-      skipped_stmt_ = false;
-      if (!hardcoded_execute_filter(query)) {
-        skipped_stmt_ = true;
-        skipped_query_ = query;
-        LOG_INFO("Statement skipped");
-        std::unique_ptr<Packet> response(new Packet());
-        // Send Parse complete response
-        response->msg_type = '1';
-        responses.push_back(std::move(response));
-        break;
-      }
-
-      // Read number of params
-      int num_params = packet_getint(pkt, 2);
-      LOG_INFO("NumParams: %d", num_params);
-
-      // Read param types
-      std::vector<int32_t> param_types(num_params);
-      for (int i = 0; i < num_params; i++) {
-        int param_type = packet_getint(pkt, 4);
-        param_types[i] = param_type;
-      }
-
-      // Prepare statement
-      bool is_failed = db.PrepareStmt(query.c_str(), &stmt, err_msg);
-      if (is_failed) {
-        send_error_response({{'M', err_msg}}, responses);
-        send_ready_for_query(txn_state, responses);
-      }
-      std::shared_ptr<CacheEntry> entry(new CacheEntry());
-      entry->stmt_name = prep_stmt_name;
-      entry->query_string = query;
-      entry->sql_stmt = stmt;
-      entry->param_types = std::move(param_types);
-
-      if (prep_stmt_name.empty()) {
-        // Unnamed statement
-        unnamed_entry = entry;
-      } else {
-        cache_.insert(std::make_pair(std::move(prep_stmt_name), entry));
-      }
-
-      std::unique_ptr<Packet> response(new Packet());
-
-      // Send Parse complete response
-      response->msg_type = '1';
-      responses.push_back(std::move(response));
+      exec_parse_message(pkt, responses);
       break;
     }
 
     case 'B': {
-      // BIND message
-      LOG_INFO("BIND message");
-      std::string portal_name = get_string_token(pkt);
-      LOG_INFO("Portal name: %s", portal_name.c_str());
-      std::string prep_stmt_name = get_string_token(pkt);
-      LOG_INFO("Prep stmt name: %s", prep_stmt_name.c_str());
-
-      if (skipped_stmt_) {
-        //send bind complete
-        std::unique_ptr<Packet> response(new Packet());
-        response->msg_type = '2';
-        responses.push_back(std::move(response));
-        break;
-      }
-
-      // Read parameter format
-      int num_params_format = packet_getint(pkt, 2);
-
-      std::vector<int16_t> formats(num_params_format);
-      for (int i = 0; i < num_params_format; i++) {
-        formats[i] = packet_getint(pkt, 2);
-      }
-
-      int num_params = packet_getint(pkt, 2);
-      if (num_params_format != num_params) {
-        // TODO: Should throw error here.
-      }
-
-      // Get statement info generated in PARSE message
-      sqlite3_stmt *stmt = nullptr;
-      std::string query_string;
-      std::shared_ptr<CacheEntry> entry;
-      if (prep_stmt_name.empty()) {
-        LOG_INFO("Unnamed statement");
-        entry = unnamed_entry;
-      } else {
-        auto itr = cache_.find(prep_stmt_name);
-        if (itr != cache_.end()) {
-          entry = *itr;
-        } else {
-          // TODO: Should throw error here
-        }
-      }
-      stmt = entry->sql_stmt;
-      query_string = entry->query_string;
-
-      skipped_stmt_ = false;
-      if (!hardcoded_execute_filter(query_string)) {
-        skipped_stmt_ = true;
-        skipped_query_ = query_string;
-        LOG_INFO("Statement skipped: %s", skipped_query_.c_str());
-        std::unique_ptr<Packet> response(new Packet());
-        // Send Parse complete response
-        response->msg_type = '2';
-        responses.push_back(std::move(response));
-        break;
-      }
-
-
-      std::vector<std::pair<int, std::string>> bind_parameters;
-      for (int param_idx = 0; param_idx < num_params; param_idx++) {
-        int param_len = packet_getint(pkt, 4);
-        auto param = packet_getbytes(pkt, param_len);
-
-        if (formats[param_idx] == 0) {
-          // TEXT mode
-          LOG_INFO("TEXT mode");
-          std::string param_str = std::string(std::begin(param),
-                                              std::end(param));
-          bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
-          LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
-        } else {
-          // BINARY mode
-          LOG_INFO("BINARY mode");
-          switch (entry->param_types[param_idx]) {
-            case POSTGRES_VALUE_TYPE_INTEGER: {
-              int int_val = 0;
-              for (size_t i = 0; i < sizeof(int); ++i) {
-                int_val = (int_val << 8) | param[i];
-              }
-              bind_parameters.push_back(
-                  std::make_pair(WIRE_INTEGER, std::to_string(int_val)));
-              LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
-            } break;
-            case POSTGRES_VALUE_TYPE_DOUBLE: {
-              double float_val = 0;
-              unsigned long buf = 0;
-              for (size_t i = 0; i < sizeof(double); ++i) {
-                buf = (buf << 8) | param[i];
-              }
-              memcpy(&float_val, &buf, sizeof(double));
-              // TODO: read float val
-              bind_parameters.push_back(
-                  std::make_pair(WIRE_FLOAT, std::to_string(float_val)));
-              LOG_INFO("Bind param (size: %d) : %lf", param_len, float_val);
-            } break;
-            default: {
-              LOG_ERROR("Do not support data type: %d",
-                        entry->param_types[param_idx]);
-            } break;
-          }
-        }
-      }
-
-      std::string err_msg;
-      bool is_failed = db.BindStmt(bind_parameters, &stmt, err_msg);
-      if (is_failed) {
-        send_error_response({{'M', err_msg}}, responses);
-        send_ready_for_query(txn_state, responses);
-      }
-
-      std::shared_ptr<Portal> portal(new Portal());
-      portal->query_string = std::move(query_string);
-      portal->stmt = stmt;
-      portal->prep_stmt_name = prep_stmt_name;
-      portal->portal_name = std::move(portal_name);
-
-      auto itr = portals_.find(portal_name);
-      if (portals_.find(portal_name) == portals_.end()) {
-        portals_.insert(std::make_pair(portal_name, portal));
-      } else {
-        std::shared_ptr<Portal> p = itr->second;
-        itr->second = portal;
-      }
-
-      //send bind complete
-      std::unique_ptr<Packet> response(new Packet());
-      response->msg_type = '2';
-      responses.push_back(std::move(response));
+      exec_bind_message(pkt, responses);
       break;
     }
 
     case 'D': {
-      LOG_INFO("DESCRIBE message");
-      auto mode = packet_getbytes(pkt, 1);
-      LOG_INFO("mode %c", mode[0]);
-
-      std::string name = get_string_token(pkt);
-      LOG_INFO("name: %s", name.c_str());
-      if (mode[0] == 'P') {
-        auto portal_itr = portals_.find(name);
-        if (portal_itr == portals_.end()) {
-          // TODO: error handling here
-          std::vector<wiredb::FieldInfoType> rowdesc;
-          put_row_desc(rowdesc, responses);
-          break;
-        }
-        std::shared_ptr<Portal> p = portal_itr->second;
-        db.GetRowDesc(p->stmt, p->rowdesc);
-        put_row_desc(p->rowdesc, responses);
-      } else if (mode[0] == 'S') {
-        // TODO: need to handle this case
-      } else {
-        // TODO: error handling here
-      }
+      exec_describe_message(pkt, responses);
       break;
     }
 
     case 'E': {
-      // EXECUTE message
-      LOG_INFO("EXECUTE message");
-      std::vector<wiredb::ResType> results;
-      std::string err_msg;
-      sqlite3_stmt *stmt = nullptr;
-      int rows_affected = 0, is_failed;
-      std::string portal_name = get_string_token(pkt);
-
-      // covers weird JDBC edge case of sending double BEGIN statements. Don't execute them
-      if (skipped_stmt_) {
-        LOG_INFO("Statement skipped: %s", skipped_query_.c_str());
-        complete_command(skipped_query_, rows_affected, responses);
-        skipped_stmt_ = false;
-        break;
-      }
-
-      auto portal = portals_[portal_name];
-      stmt = portal->stmt;
-      ASSERT(stmt != nullptr);
-
-      bool unnamed = portal->prep_stmt_name.empty();
-
-      LOG_INFO("Executing query: %s", portal->query_string.c_str());
-      is_failed = db.ExecPrepStmt(stmt, unnamed, results, rows_affected, err_msg);
-      if (is_failed) {
-        LOG_INFO("Failed to execute: %s", err_msg.c_str());
-        send_error_response({{'M', err_msg}}, responses);
-        send_ready_for_query(txn_state, responses);
-      }
-
-      //put_row_desc(portal->rowdesc, responses);
-      send_data_rows(results, results.size(), rows_affected, responses);
-      complete_command(portal->query_string, rows_affected, responses);
-
+      exec_execute_message(pkt, responses);
       break;
     }
 

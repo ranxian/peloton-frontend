@@ -268,16 +268,6 @@ private:
     // info.size() should be 2
     LOG_INFO("col %ld, info %ld", res.size(), info.size());
 
-    for(auto item : res) {
-      for(char c : item.first) {
-        LOG_INFO("%c", c);
-      }
-      LOG_INFO("\n");
-      for(char c : item.second) {
-        LOG_INFO("%c", c);
-      }
-    }
-
     res.clear();
   }
   static inline void copyFromTo(const char *src, std::vector<unsigned char> &dst) {

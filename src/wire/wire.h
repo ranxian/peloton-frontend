@@ -91,11 +91,20 @@ class PacketManager {
 
   bool hardcoded_execute_filter(std::string query);
 
+  void exec_parse_message(Packet *pkt, ResponseBuffer &responses);
+
+  void exec_bind_message(Packet *pkt, ResponseBuffer &responses);
+
+  void exec_describe_message(Packet *pkt, ResponseBuffer &responses);
+
+  void exec_execute_message(Packet *pkt, ResponseBuffer &response);
+
   void close_client();
 
  public:
 
-  inline PacketManager(SocketManager<PktBuf>* sock) : client(sock), txn_state(TXN_IDLE) {}
+  inline PacketManager(SocketManager<PktBuf>* sock) :
+      client(sock), txn_state(TXN_IDLE) {}
 
   bool process_startup_packet(Packet* pkt, ResponseBuffer& responses);
 
