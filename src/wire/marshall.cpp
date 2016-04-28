@@ -62,25 +62,28 @@ int packet_getint(Packet *pkt, uchar base) {
   return value;
 }
 
-PktBuf packet_getbytes(Packet *pkt, size_t len) {
-  PktBuf result;
+void packet_getbytes(Packet *pkt, size_t len, PktBuf& result) {
+  result.clear();
   check_overflow(pkt, len);
+
+  // return empty vector
+  if (len == 0)
+    return;
 
   result.insert(std::end(result), std::begin(pkt->buf) + pkt->ptr,
                 get_end_itr(pkt, len));
 
   // move the pointer
   pkt->ptr += len;
-  return result;
 }
 
 /*
  * packet_getstring - parse out a string of size len.
  * 		if len=0? parse till the end of the string
  */
-std::string packet_getstring(Packet *pkt, size_t len) {
+void packet_getstring(Packet *pkt, size_t len, std::string& result) {
   // exclude null char for std string
-  return std::string(std::begin(pkt->buf) + pkt->ptr,
+  result = std::string(std::begin(pkt->buf) + pkt->ptr,
                      get_end_itr(pkt, len - 1));
 }
 
@@ -88,7 +91,7 @@ std::string packet_getstring(Packet *pkt, size_t len) {
  * get_string_token - used to extract a string token
  * 		from an unsigned char vector
  */
-std::string get_string_token(Packet *pkt) {
+void get_string_token(Packet *pkt, std::string& result) {
   // save start itr position of string
   auto start = std::begin(pkt->buf) + pkt->ptr;
 
@@ -98,16 +101,20 @@ std::string get_string_token(Packet *pkt) {
     // no match? consider the remaining vector
     // as a single string and continue
     pkt->ptr = pkt->len;
-    return std::string(std::begin(pkt->buf) + pkt->ptr, std::end(pkt->buf));
+    result = std::string(std::begin(pkt->buf) + pkt->ptr, std::end(pkt->buf));
+    return;
   }
 
   // update ptr position
   pkt->ptr = find_itr - std::begin(pkt->buf) + 1;
 
   // edge case
-  if (start == find_itr) return std::string("");
+  if (start == find_itr){
+    result = std::string("");
+    return;
+  }
 
-  return std::string(start, find_itr);
+  result = std::string(start, find_itr);
 }
 
 void packet_putbyte(std::unique_ptr<Packet> &pkt, const uchar c) {

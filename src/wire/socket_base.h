@@ -19,6 +19,7 @@
 #include <netinet/in.h>
 #include <iostream>
 #include "logger.h"
+#include "globals.h"
 
 #define SOCKET_BUFFER_SIZE 8192
 #define MAX_CONNECTIONS 64
@@ -32,7 +33,6 @@ typedef unsigned char uchar;
 
 typedef std::array<uchar, SOCKET_BUFFER_SIZE> SockBuf;
 
-struct ThreadGlobals;
 
 struct Server {
   int port;
@@ -85,7 +85,7 @@ class SocketManager {
 extern void start_server(Server *server);
 
 template <typename P, typename B>
-void client_handler(std::unique_ptr<int> clientfd);
+void client_handler(ThreadGlobals& globals, std::unique_ptr<int> clientfd);
 
 template <typename P, typename B>
 void handle_connections(Server *server);
@@ -120,7 +120,7 @@ void handle_connections(Server *server) {
     std::unique_ptr<int> clientfd(new int(connfd));
 
     std::cout << "LAUNCHING NEW THREAD" << std::endl;
-    std::thread client_thread(client_handler<P, B>, std::ref(globals), (std::move(clientfd));
+    std::thread client_thread(client_handler<P, B>, std::ref(globals), std::move(clientfd));
     client_thread.detach();
   }
 }

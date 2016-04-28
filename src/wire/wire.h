@@ -25,9 +25,9 @@
 namespace peloton {
 namespace wire {
 
-struct Packet;
-
 typedef std::vector<uchar> PktBuf;
+
+struct Packet;
 
 typedef std::vector<std::unique_ptr<Packet>> ResponseBuffer;
 
@@ -38,10 +38,6 @@ struct Client {
   std::unordered_map<std::string, std::string> cmdline_options;
 
   inline Client(SocketManager<PktBuf>* sock) : sock(sock) {}
-};
-
-struct ThreadGlobals {
-  std::mutex sqlite_mutex;
 };
 
 

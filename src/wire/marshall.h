@@ -35,11 +35,11 @@ extern void packet_putbytes(std::unique_ptr<Packet> &pkt, const std::vector<ucha
  */
 extern int packet_getint(Packet *pkt, uchar base);
 
-extern std::string packet_getstring(Packet *pkt, size_t len = 0);
+extern void packet_getstring(Packet *pkt, size_t len, std::string& result);
 
-extern PktBuf packet_getbytes(Packet *pkt, size_t len = 0);
+extern void packet_getbytes(Packet *pkt, size_t len, PktBuf& result);
 
-extern std::string get_string_token(Packet *pkt);
+extern void get_string_token(Packet *pkt, std::string& result);
 
 /*
  * Socket layer interface

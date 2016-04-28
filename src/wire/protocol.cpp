@@ -87,20 +87,20 @@ bool PacketManager::process_startup_packet(Packet* pkt,
   for (;;) {
     // loop end case?
     if (pkt->ptr >= pkt->len) break;
-    token = get_string_token(pkt);
+    get_string_token(pkt, token);
 
     // if the option database was found
     if (token.compare("database") == 0) {
       // loop end?
       if (pkt->ptr >= pkt->len) break;
-      client.dbname = get_string_token(pkt);
+      get_string_token(pkt, client.dbname);
     } else if (token.compare(("user")) == 0) {
       // loop end?
       if (pkt->ptr >= pkt->len) break;
-      client.user = get_string_token(pkt);
+      get_string_token(pkt, client.user);
     } else {
       if (pkt->ptr >= pkt->len) break;
-      value = get_string_token(pkt);
+      get_string_token(pkt, value);
       client.cmdline_options[token] = value;
     }
   }
@@ -266,7 +266,8 @@ bool PacketManager::hardcoded_execute_filter(std::string query) {
 }
 
 void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses, ThreadGlobals& globals) {
-  std::string q_str = packet_getstring(pkt, pkt->len);
+  std::string q_str;
+  packet_getstring(pkt, pkt->len, q_str);
   LOG_INFO("Query Received: %s \n", q_str.c_str());
 
   std::vector<std::string> queries;
@@ -315,14 +316,14 @@ void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses, T
  */
 void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
   LOG_INFO("PARSE message");
-  std::string err_msg;
-  std::string prep_stmt_name = get_string_token(pkt);
+  std::string err_msg, prep_stmt_name, query ;
+  get_string_token(pkt, prep_stmt_name);
 
   // Read prepare statement name
   sqlite3_stmt *stmt = nullptr;
   LOG_INFO("Prep stmt: %s", prep_stmt_name.c_str());
   // Read query string
-  std::string query = get_string_token(pkt);
+  get_string_token(pkt, query);
   LOG_INFO("Parse Query: %s", query.c_str());
 
   skipped_stmt_ = false;
@@ -375,11 +376,12 @@ void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
 }
 
 void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
+  std::string portal_name, prep_stmt_name;
   // BIND message
   LOG_INFO("BIND message");
-  std::string portal_name = get_string_token(pkt);
+  get_string_token(pkt, portal_name);
   LOG_INFO("Portal name: %s", portal_name.c_str());
-  std::string prep_stmt_name = get_string_token(pkt);
+  get_string_token(pkt, prep_stmt_name);
   LOG_INFO("Prep stmt name: %s", prep_stmt_name.c_str());
 
   if (skipped_stmt_) {
@@ -434,15 +436,21 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
   }
 
   std::vector<std::pair<int, std::string>> bind_parameters;
+  PktBuf param;
   for (int param_idx = 0; param_idx < num_params; param_idx++) {
     int param_len = packet_getint(pkt, 4);
-    auto param = packet_getbytes(pkt, param_len);
+    packet_getbytes(pkt, param_len, param);
 
-    if (formats[param_idx] == 0) {
+    // BIND packet NULL parameter case
+    if (param_len == -1) {
+      // NULL mode
+      LOG_INFO("NULL mode");
+      bind_parameters.push_back(std::make_pair(WIRE_NULL, std::string("")));
+    } else if (formats[param_idx] == 0) {
       // TEXT mode
       LOG_INFO("TEXT mode");
       std::string param_str = std::string(std::begin(param),
-          std::end(param));
+                                          std::end(param));
       bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
       LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
     } else {
@@ -457,7 +465,8 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
           bind_parameters.push_back(
               std::make_pair(WIRE_INTEGER, std::to_string(int_val)));
           LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
-        } break;
+        }
+          break;
         case POSTGRES_VALUE_TYPE_DOUBLE: {
           double float_val = 0;
           unsigned long buf = 0;
@@ -469,11 +478,13 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
           bind_parameters.push_back(
               std::make_pair(WIRE_FLOAT, std::to_string(float_val)));
           LOG_INFO("Bind param (size: %d) : %lf", param_len, float_val);
-        } break;
+        }
+          break;
         default: {
           LOG_ERROR("Do not support data type: %d",
-              entry->param_types[param_idx]);
-        } break;
+                    entry->param_types[param_idx]);
+        }
+          break;
       }
     }
   }
@@ -507,11 +518,12 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
 
 void PacketManager::exec_describe_message(Packet *pkt,
                                           ResponseBuffer &responses) {
+  PktBuf mode;
+  std::string name;
   LOG_INFO("DESCRIBE message");
-  auto mode = packet_getbytes(pkt, 1);
+  packet_getbytes(pkt, 1, mode);
   LOG_INFO("mode %c", mode[0]);
-
-  std::string name = get_string_token(pkt);
+  get_string_token(pkt, name);
   LOG_INFO("name: %s", name.c_str());
   if (mode[0] == 'P') {
     auto portal_itr = portals_.find(name);
@@ -536,10 +548,10 @@ void PacketManager::exec_execute_message(Packet *pkt,
   // EXECUTE message
   LOG_INFO("EXECUTE message");
   std::vector<wiredb::ResType> results;
-  std::string err_msg;
+  std::string err_msg, portal_name;
   sqlite3_stmt *stmt = nullptr;
   int rows_affected = 0, is_failed;
-  std::string portal_name = get_string_token(pkt);
+  get_string_token(pkt, portal_name);
 
   // covers weird JDBC edge case of sending double BEGIN statements. Don't execute them
   if (skipped_stmt_) {
