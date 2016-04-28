@@ -6,7 +6,6 @@
 #define PELOTON_SQLITE_H
 
 #include "database.h"
-#include "globals.h"
 #include <stdlib.h>
 #include <sqlite3.h>
 #include <stdio.h>
@@ -45,12 +44,12 @@ public:
                          std::vector<ResType> &res,
                          std::vector<FieldInfoType> &info,
                          int &rows_change,
-                         std::string &err_msg, wire::ThreadGlobals& globals) {
+                         std::string &err_msg) {
     LOG_INFO("receive %s", query);
     sqlite3_stmt *sql_stmt;
     sqlite3_prepare_v2(db, query, -1, &sql_stmt, NULL);
     GetRowDesc(sql_stmt, info);
-    return ExecPrepStmt(sql_stmt, true, res, rows_change, err_msg, globals);
+    return ExecPrepStmt(sql_stmt, true, res, rows_change, err_msg);
   }
 /*
 
@@ -175,9 +174,7 @@ public:
    */
   int ExecPrepStmt(void *stmt, bool unnamed, std::vector<ResType> &res,
                    int &rows_change,
-                   std::string &err_msg, wire::ThreadGlobals& globals) {
-
-    std::lock_guard<std::mutex> guard(globals.sqlite_mutex);
+                   std::string &err_msg) {
 
     LOG_INFO("Executing statement......................");
     auto sql_stmt = (sqlite3_stmt *)stmt;

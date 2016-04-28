@@ -265,7 +265,7 @@ bool PacketManager::hardcoded_execute_filter(std::string query) {
   return true;
 }
 
-void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses, ThreadGlobals& globals) {
+void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
   std::string q_str;
   packet_getstring(pkt, pkt->len, q_str);
   LOG_INFO("Query Received: %s \n", q_str.c_str());
@@ -293,7 +293,7 @@ void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses, T
     std::string err_msg;
     int rows_affected;
 
-    int isfailed =  db.PortalExec(query->c_str(), results, rowdesc, rows_affected, err_msg, globals);
+    int isfailed =  db.PortalExec(query->c_str(), results, rowdesc, rows_affected, err_msg);
 
     if(isfailed) {
       send_error_response({{'M', err_msg}}, responses);
@@ -568,11 +568,24 @@ void PacketManager::exec_execute_message(Packet *pkt,
   bool unnamed = portal->prep_stmt_name.empty();
 
   LOG_INFO("Executing query: %s", portal->query_string.c_str());
-  is_failed = db.ExecPrepStmt(stmt, unnamed, results, rows_affected, err_msg, globals);
+
+  // acquire the mutex if we are starting a txn
+  if (portal->query_string.compare("BEGIN") == 0) {
+    LOG_WARN("BEGIN - acquire lock");
+    globals.sqlite_mutex.lock();
+  }
+
+  is_failed = db.ExecPrepStmt(stmt, unnamed, results, rows_affected, err_msg);
   if (is_failed) {
     LOG_INFO("Failed to execute: %s", err_msg.c_str());
     send_error_response({{'M', err_msg}}, responses);
     send_ready_for_query(txn_state, responses);
+  }
+
+  // release the mutex after a txn commit
+  if (portal->query_string.compare("COMMIT") == 0) {
+    LOG_WARN("COMMIT - release lock");
+    globals.sqlite_mutex.unlock();
   }
 
   //put_row_desc(portal->rowdesc, responses);
@@ -587,7 +600,7 @@ void PacketManager::exec_execute_message(Packet *pkt,
 bool PacketManager::process_packet(Packet* pkt, ThreadGlobals& globals, ResponseBuffer& responses) {
   switch (pkt->msg_type) {
     case 'Q': {
-      exec_query_message(pkt, responses, globals);
+      exec_query_message(pkt, responses);
     } break;
     case 'P': {
       exec_parse_message(pkt, responses);
