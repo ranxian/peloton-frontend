@@ -19,7 +19,7 @@ public:
   Sqlite() {
     // sqlite3_open(filename, sqlite3 **db)
     // filename is null for in memory db
-    auto rc = sqlite3_open("ycsb.db", &db);
+    auto rc = sqlite3_open_v2("ycsb.db", &db, SQLITE_OPEN_NOMUTEX|SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE, NULL);
     if (rc) {
       fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
       LOG_ERROR("Can't open database %s", sqlite3_errmsg(db));
