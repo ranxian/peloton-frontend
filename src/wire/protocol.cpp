@@ -439,52 +439,54 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
   PktBuf param;
   for (int param_idx = 0; param_idx < num_params; param_idx++) {
     int param_len = packet_getint(pkt, 4);
-    packet_getbytes(pkt, param_len, param);
-
     // BIND packet NULL parameter case
     if (param_len == -1) {
       // NULL mode
       LOG_INFO("NULL mode");
       bind_parameters.push_back(std::make_pair(WIRE_NULL, std::string("")));
-    } else if (formats[param_idx] == 0) {
-      // TEXT mode
-      LOG_INFO("TEXT mode");
-      std::string param_str = std::string(std::begin(param),
-                                          std::end(param));
-      bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
-      LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
     } else {
-      // BINARY mode
-      LOG_INFO("BINARY mode");
-      switch (entry->param_types[param_idx]) {
-        case POSTGRES_VALUE_TYPE_INTEGER: {
-          int int_val = 0;
-          for (size_t i = 0; i < sizeof(int); ++i) {
-            int_val = (int_val << 8) | param[i];
+      packet_getbytes(pkt, param_len, param);
+
+      if (formats[param_idx] == 0) {
+        // TEXT mode
+        LOG_INFO("TEXT mode");
+        std::string param_str = std::string(std::begin(param),
+            std::end(param));
+        bind_parameters.push_back(std::make_pair(WIRE_TEXT, param_str));
+        LOG_INFO("Bind param (size: %d) : %s", param_len, param_str.c_str());
+      } else {
+        // BINARY mode
+        LOG_INFO("BINARY mode");
+        switch (entry->param_types[param_idx]) {
+          case POSTGRES_VALUE_TYPE_INTEGER: {
+            int int_val = 0;
+            for (size_t i = 0; i < sizeof(int); ++i) {
+              int_val = (int_val << 8) | param[i];
+            }
+            bind_parameters.push_back(
+                std::make_pair(WIRE_INTEGER, std::to_string(int_val)));
+            LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
           }
-          bind_parameters.push_back(
-              std::make_pair(WIRE_INTEGER, std::to_string(int_val)));
-          LOG_INFO("Bind param (size: %d) : %d", param_len, int_val);
-        }
-          break;
-        case POSTGRES_VALUE_TYPE_DOUBLE: {
-          double float_val = 0;
-          unsigned long buf = 0;
-          for (size_t i = 0; i < sizeof(double); ++i) {
-            buf = (buf << 8) | param[i];
+            break;
+          case POSTGRES_VALUE_TYPE_DOUBLE: {
+            double float_val = 0;
+            unsigned long buf = 0;
+            for (size_t i = 0; i < sizeof(double); ++i) {
+              buf = (buf << 8) | param[i];
+            }
+            memcpy(&float_val, &buf, sizeof(double));
+            // TODO: read float val
+            bind_parameters.push_back(
+                std::make_pair(WIRE_FLOAT, std::to_string(float_val)));
+            LOG_INFO("Bind param (size: %d) : %lf", param_len, float_val);
           }
-          memcpy(&float_val, &buf, sizeof(double));
-          // TODO: read float val
-          bind_parameters.push_back(
-              std::make_pair(WIRE_FLOAT, std::to_string(float_val)));
-          LOG_INFO("Bind param (size: %d) : %lf", param_len, float_val);
+            break;
+          default: {
+            LOG_ERROR("Do not support data type: %d",
+                      entry->param_types[param_idx]);
+          }
+            break;
         }
-          break;
-        default: {
-          LOG_ERROR("Do not support data type: %d",
-                    entry->param_types[param_idx]);
-        }
-          break;
       }
     }
   }
