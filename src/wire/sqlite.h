@@ -233,50 +233,50 @@ public:
 
 private:
   void test() {
-  //    LOG_INFO("RUN TEST");
-  //
-  //    std::vector<ResType> res;
-  //    std::vector<FieldInfoType> info;
-  //    std::string err;
-  //    int rows;
-  //
-  //
-  //    // create table
-  //    // PortalExec("DROP TABLE IF EXISTS AA", res, info, rows, err);
-  //    // PortalExec("CREATE TABLE AA (id INT PRIMARY KEY, data TEXT);", res, info, rows, err);
-  //    res.clear();
-  //
-  //    // test simple insert
-  //    // PortalExec("INSERT INTO AA VALUES (1, 'abc'); ", res, info, rows, err);
-  //    std::vector<std::pair<int, std::string>> parameters;
-  //    parameters.push_back(std::make_pair(WIRE_TEXT, std::string("12")));
-  //    parameters.push_back(std::make_pair(WIRE_TEXT, std::string("abc")));
-  //
-  //
-  //    // test bind
-  //    sqlite3_stmt *s;
-  //    PrepareStmt("insert into AA (id, data) values ( ?, ? )", &s, err);
-  //    BindStmt(parameters, &s, err);
-  //    GetRowDesc(s, info);
-  //    // ExecPrepStmt(s, false, res, rows, err);
-  //    BindStmt(parameters, &s, err);
-  //    GetRowDesc(s, info);
-  //    // ExecPrepStmt(s, false, res, rows, err);
-  //    res.clear();
-  //
-  //    // select all
-  //    sqlite3_stmt *sql_stmt;
-  //    sqlite3_prepare_v2(db, "select * from AA;", -1, &sql_stmt, NULL);
-  //    res.clear();
-  //    info.clear();
-  //    GetRowDesc(s, info);
-  //    // ExecPrepStmt(sql_stmt, false, res, rows, err);
-  //
-  //    // res.size() should be 4
-  //    // info.size() should be 2
-  //    LOG_INFO("col %ld, info %ld", res.size(), info.size());
-  //
-  //    res.clear();
+      LOG_INFO("RUN TEST");
+
+      std::vector<ResType> res;
+      std::vector<FieldInfoType> info;
+      std::string err;
+      int rows;
+
+
+      // create table
+      PortalExec("DROP TABLE IF EXISTS AA", res, info, rows, err);
+      PortalExec("CREATE TABLE AA (id INT PRIMARY KEY, data TEXT);", res, info, rows, err);
+      res.clear();
+
+      // test simple insert
+      PortalExec("INSERT INTO AA VALUES (1, 'abc'); ", res, info, rows, err);
+      std::vector<std::pair<int, std::string>> parameters;
+      parameters.push_back(std::make_pair(WIRE_TEXT, std::string("12")));
+      parameters.push_back(std::make_pair(WIRE_TEXT, std::string("abc")));
+
+
+      // test bind
+      sqlite3_stmt *s;
+      PrepareStmt("insert into AA (id, data) values ( ?, ? )", &s, err);
+      BindStmt(parameters, &s, err);
+      GetRowDesc(s, info);
+      ExecPrepStmt(s, false, res, rows, err);
+      BindStmt(parameters, &s, err);
+      GetRowDesc(s, info);
+      ExecPrepStmt(s, false, res, rows, err);
+      res.clear();
+
+      // select all
+      sqlite3_stmt *sql_stmt;
+      sqlite3_prepare_v2(db, "select * from AA;", -1, &sql_stmt, NULL);
+      res.clear();
+      info.clear();
+      GetRowDesc(s, info);
+      ExecPrepStmt(sql_stmt, false, res, rows, err);
+
+      // res.size() should be 4
+      // info.size() should be 2
+      LOG_INFO("col %ld, info %ld", res.size(), info.size());
+
+      res.clear();
   }
 
   static inline void copyFromTo(const char *src, std::vector<unsigned char> &dst) {
