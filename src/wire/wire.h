@@ -40,6 +40,11 @@ struct Client {
   inline Client(SocketManager<PktBuf>* sock) : sock(sock) {}
 };
 
+struct ThreadGlobals {
+  std::mutex sqlite_mutex;
+};
+
+
 struct Packet {
   PktBuf buf;
   size_t len;
@@ -91,7 +96,7 @@ class PacketManager {
 
   bool hardcoded_execute_filter(std::string query);
 
-  void exec_query_message(Packet *pkt, ResponseBuffer &responses);
+  void exec_query_message(Packet *pkt, ResponseBuffer &responses, ThreadGlobals& globals);
 
   void exec_parse_message(Packet *pkt, ResponseBuffer &responses);
 
@@ -99,7 +104,7 @@ class PacketManager {
 
   void exec_describe_message(Packet *pkt, ResponseBuffer &responses);
 
-  void exec_execute_message(Packet *pkt, ResponseBuffer &response);
+  void exec_execute_message(Packet *pkt, ResponseBuffer &response, ThreadGlobals& globals);
 
   void close_client();
 
@@ -110,9 +115,9 @@ class PacketManager {
 
   bool process_startup_packet(Packet* pkt, ResponseBuffer& responses);
 
-  bool process_packet(Packet* pkt, ResponseBuffer& responses);
+  bool process_packet(Packet* pkt, ThreadGlobals &globals, ResponseBuffer& responses);
 
-  void manage_packets();
+  void manage_packets(ThreadGlobals& globals);
 };
 }
 }

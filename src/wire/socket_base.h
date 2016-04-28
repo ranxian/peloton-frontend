@@ -9,6 +9,7 @@
 #include <vector>
 #include <thread>
 #include <cstring>
+#include <mutex>
 #include <unistd.h>
 #include <sys/file.h>
 #include <sys/socket.h>
@@ -30,6 +31,8 @@ class PacketManager;
 typedef unsigned char uchar;
 
 typedef std::array<uchar, SOCKET_BUFFER_SIZE> SockBuf;
+
+struct ThreadGlobals;
 
 struct Server {
   int port;
@@ -103,6 +106,8 @@ void handle_connections(Server *server) {
   int connfd, clilen;
   struct sockaddr_in cli_addr;
   clilen = sizeof(cli_addr);
+  ThreadGlobals globals;
+
   for (;;) {
     // block and wait for incoming connection
     connfd = accept(server->server_fd, (struct sockaddr *)&cli_addr,
@@ -115,7 +120,7 @@ void handle_connections(Server *server) {
     std::unique_ptr<int> clientfd(new int(connfd));
 
     std::cout << "LAUNCHING NEW THREAD" << std::endl;
-    std::thread client_thread(client_handler<P, B>, std::move(clientfd));
+    std::thread client_thread(client_handler<P, B>, std::ref(globals), (std::move(clientfd));
     client_thread.detach();
   }
 }
@@ -126,12 +131,12 @@ void handle_connections(Server *server) {
  * 		type for the protocol's buffer (B)
  */
 template <typename P, typename B>
-void client_handler(std::unique_ptr<int> clientfd) {
+void client_handler(ThreadGlobals& globals, std::unique_ptr<int> clientfd) {
   int fd = *clientfd;
   LOG_INFO("Client fd: %d", fd);
   SocketManager<B> sm(fd);
   P p(&sm);
-  p.manage_packets();
+  p.manage_packets(globals);
 }
 }
 }

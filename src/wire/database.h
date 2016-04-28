@@ -9,6 +9,7 @@
 #include <string>
 #include <tuple>
 #include "logger.h"
+#include "wire.h"
 
 namespace peloton {
 namespace wiredb {

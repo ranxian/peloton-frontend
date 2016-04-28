@@ -6,6 +6,7 @@
 #define PELOTON_SQLITE_H
 
 #include "database.h"
+#include "wire.h"
 #include <stdlib.h>
 #include <sqlite3.h>
 #include <stdio.h>
@@ -15,6 +16,7 @@ namespace wiredb {
 
 #define UNUSED __attribute__((unused))
 class Sqlite : public DataBase {
+
 public:
   Sqlite() {
     // sqlite3_open(filename, sqlite3 **db)
@@ -43,12 +45,12 @@ public:
                          std::vector<ResType> &res,
                          std::vector<FieldInfoType> &info,
                          int &rows_change,
-                         std::string &err_msg) {
+                         std::string &err_msg, wire::ThreadGlobals& globals) {
     LOG_INFO("receive %s", query);
     sqlite3_stmt *sql_stmt;
     sqlite3_prepare_v2(db, query, -1, &sql_stmt, NULL);
     GetRowDesc(sql_stmt, info);
-    return ExecPrepStmt(sql_stmt, true, res, rows_change, err_msg);
+    return ExecPrepStmt(sql_stmt, true, res, rows_change, err_msg, globals);
   }
 /*
 
@@ -167,7 +169,10 @@ public:
    */
   int ExecPrepStmt(void *stmt, bool unnamed, std::vector<ResType> &res,
                    int &rows_change,
-                   std::string &err_msg) {
+                   std::string &err_msg, wire::ThreadGlobals& globals) {
+
+    std::lock_guard<std::mutex> guard(globals.sqlite_mutex);
+
     LOG_INFO("Executing statement......................");
     auto sql_stmt = (sqlite3_stmt *)stmt;
     auto ret = sqlite3_step(sql_stmt);
@@ -250,10 +255,10 @@ private:
     PrepareStmt("insert into AA (id, data) values ( ?, ? )", &s, err);
     BindStmt(parameters, &s, err);
     GetRowDesc(s, info);
-    ExecPrepStmt(s, false, res, rows, err);
+    // ExecPrepStmt(s, false, res, rows, err);
     BindStmt(parameters, &s, err);
     GetRowDesc(s, info);
-    ExecPrepStmt(s, false, res, rows, err);
+    // ExecPrepStmt(s, false, res, rows, err);
     res.clear();
 
     // select all
@@ -262,7 +267,7 @@ private:
     res.clear();
     info.clear();
     GetRowDesc(s, info);
-    ExecPrepStmt(sql_stmt, false, res, rows, err);
+    // ExecPrepStmt(sql_stmt, false, res, rows, err);
 
     // res.size() should be 4
     // info.size() should be 2

@@ -265,7 +265,7 @@ bool PacketManager::hardcoded_execute_filter(std::string query) {
   return true;
 }
 
-void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
+void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses, ThreadGlobals& globals) {
   std::string q_str = packet_getstring(pkt, pkt->len);
   LOG_INFO("Query Received: %s \n", q_str.c_str());
 
@@ -292,7 +292,7 @@ void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
     std::string err_msg;
     int rows_affected;
 
-    int isfailed =  db.PortalExec(query->c_str(), results, rowdesc, rows_affected, err_msg);
+    int isfailed =  db.PortalExec(query->c_str(), results, rowdesc, rows_affected, err_msg, globals);
 
     if(isfailed) {
       send_error_response({{'M', err_msg}}, responses);
@@ -532,7 +532,7 @@ void PacketManager::exec_describe_message(Packet *pkt,
 }
 
 void PacketManager::exec_execute_message(Packet *pkt,
-                                         ResponseBuffer &responses) {
+                                         ResponseBuffer &responses, ThreadGlobals& globals) {
   // EXECUTE message
   LOG_INFO("EXECUTE message");
   std::vector<wiredb::ResType> results;
@@ -556,7 +556,7 @@ void PacketManager::exec_execute_message(Packet *pkt,
   bool unnamed = portal->prep_stmt_name.empty();
 
   LOG_INFO("Executing query: %s", portal->query_string.c_str());
-  is_failed = db.ExecPrepStmt(stmt, unnamed, results, rows_affected, err_msg);
+  is_failed = db.ExecPrepStmt(stmt, unnamed, results, rows_affected, err_msg, globals);
   if (is_failed) {
     LOG_INFO("Failed to execute: %s", err_msg.c_str());
     send_error_response({{'M', err_msg}}, responses);
@@ -572,10 +572,10 @@ void PacketManager::exec_execute_message(Packet *pkt,
  * process_packet - Main switch block; process incoming packets,
  *  Returns false if the seesion needs to be closed.
  */
-bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
+bool PacketManager::process_packet(Packet* pkt, ThreadGlobals& globals, ResponseBuffer& responses) {
   switch (pkt->msg_type) {
     case 'Q': {
-      exec_query_message(pkt, responses);
+      exec_query_message(pkt, responses, globals);
     } break;
     case 'P': {
       exec_parse_message(pkt, responses);
@@ -587,7 +587,7 @@ bool PacketManager::process_packet(Packet* pkt, ResponseBuffer& responses) {
       exec_describe_message(pkt, responses);
     } break;
     case 'E': {
-      exec_execute_message(pkt, responses);
+      exec_execute_message(pkt, responses, globals);
     } break;
     case 'S': {
       // SYNC message
@@ -640,7 +640,7 @@ void PacketManager::send_ready_for_query(uchar txn_status,
  * PacketManager - Main wire protocol logic.
  * 		Always return with a closed socket.
  */
-void PacketManager::manage_packets() {
+void PacketManager::manage_packets(ThreadGlobals& globals) {
   Packet pkt;
   ResponseBuffer responses;
   bool status;
@@ -662,7 +662,7 @@ void PacketManager::manage_packets() {
   pkt.reset();
   while (read_packet(&pkt, true, &client)) {
     //print_packet(&pkt);
-    status = process_packet(&pkt, responses);
+    status = process_packet(&pkt, globals, responses);
     if (!write_packets(responses, &client) || !status) {
       // close client on write failure or status failure
       close_client();
