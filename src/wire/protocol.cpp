@@ -218,10 +218,10 @@ std::string get_query_type(std::string query) {
   return query_tokens[0];
 }
 
-void PacketManager::complete_command(std::string &query, int rows, ResponseBuffer& responses) {
+void PacketManager::complete_command(const std::string &query_type,
+                                     int rows, ResponseBuffer& responses) {
   std::unique_ptr<Packet> pkt(new Packet());
   pkt->msg_type = 'C';
-  std::string query_type = get_query_type(query);
   std::string tag = query_type;
   if(!query_type.compare("BEGIN"))
     txn_state = TXN_BLOCK;
@@ -248,8 +248,7 @@ void PacketManager::send_empty_query_response(ResponseBuffer& responses) {
   responses.push_back(std::move(response));
 }
 
-bool PacketManager::hardcoded_execute_filter(std::string query) {
-  std::string query_type = get_query_type(query);
+bool PacketManager::hardcoded_execute_filter(std::string query_type) {
   // Skip SET
   if(query_type.compare("SET") == 0 || query_type.compare("SHOW") == 0)
     return false;
@@ -265,6 +264,7 @@ bool PacketManager::hardcoded_execute_filter(std::string query) {
   return true;
 }
 
+// TODO: rewrite this method
 void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
   std::string q_str;
   packet_getstring(pkt, pkt->len, q_str);
@@ -304,6 +304,7 @@ void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
 
     send_data_rows(results, rowdesc.size(), rows_affected, responses);
 
+    // TODO: should change to query_type
     complete_command(*query, rows_affected, responses);
   }
 
@@ -315,7 +316,7 @@ void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
  */
 void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
   LOG_INFO("PARSE message");
-  std::string err_msg, prep_stmt_name, query ;
+  std::string err_msg, prep_stmt_name, query, query_type;
   get_string_token(pkt, prep_stmt_name);
 
   // Read prepare statement name
@@ -326,9 +327,11 @@ void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
   LOG_INFO("Parse Query: %s", query.c_str());
 
   skipped_stmt_ = false;
-  if (!hardcoded_execute_filter(query)) {
+  query_type = get_query_type(query);
+  if (!hardcoded_execute_filter(query_type)) {
     skipped_stmt_ = true;
-    skipped_query_ = query;
+    skipped_query_ = std::move(query);
+    skipped_query_type_ = std::move(query_type);
     LOG_INFO("Statement skipped");
     std::unique_ptr<Packet> response(new Packet());
     // Send Parse complete response
@@ -356,7 +359,8 @@ void PacketManager::exec_parse_message(Packet *pkt, ResponseBuffer &responses) {
   }
   std::shared_ptr<CacheEntry> entry(new CacheEntry());
   entry->stmt_name = prep_stmt_name;
-  entry->query_string = query;
+  entry->query_string = std::move(query);
+  entry->query_type = std::move(query_type);
   entry->sql_stmt = stmt;
   entry->param_types = std::move(param_types);
 
@@ -409,7 +413,6 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
 
   // Get statement info generated in PARSE message
   sqlite3_stmt *stmt = nullptr;
-  std::string query_string;
   std::shared_ptr<CacheEntry> entry;
   if (prep_stmt_name.empty()) {
     LOG_INFO("Unnamed statement");
@@ -425,10 +428,11 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
     }
   }
   stmt = entry->sql_stmt;
-  query_string = entry->query_string;
+  const auto &query_string = entry->query_string;
+  const auto &query_type = entry->query_type;
 
   skipped_stmt_ = false;
-  if (!hardcoded_execute_filter(query_string)) {
+  if (!hardcoded_execute_filter(query_type)) {
     skipped_stmt_ = true;
     skipped_query_ = query_string;
     LOG_INFO("Statement skipped: %s", skipped_query_.c_str());
@@ -501,14 +505,16 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
     send_ready_for_query(txn_state, responses);
   }
 
+  // TODO: replace this with a constructor
   std::shared_ptr<Portal> portal(new Portal());
-  portal->query_string = std::move(query_string);
+  portal->query_string = query_string;
   portal->stmt = stmt;
   portal->prep_stmt_name = prep_stmt_name;
-  portal->portal_name = std::move(portal_name);
+  portal->portal_name = portal_name;
+  portal->query_type = query_type;
 
   auto itr = portals_.find(portal_name);
-  if (portals_.find(portal_name) == portals_.end()) {
+  if (itr == portals_.end()) {
     portals_.insert(std::make_pair(portal_name, portal));
   } else {
     std::shared_ptr<Portal> p = itr->second;
@@ -561,21 +567,23 @@ void PacketManager::exec_execute_message(Packet *pkt,
   // covers weird JDBC edge case of sending double BEGIN statements. Don't execute them
   if (skipped_stmt_) {
     LOG_INFO("Statement skipped: %s", skipped_query_.c_str());
-    complete_command(skipped_query_, rows_affected, responses);
+    complete_command(skipped_query_type_, rows_affected, responses);
     skipped_stmt_ = false;
     return;
   }
 
   auto portal = portals_[portal_name];
+  const auto &query_string = portal->query_string;
+  const auto &query_type = portal->query_type;
   stmt = portal->stmt;
   ASSERT(stmt != nullptr);
 
   bool unnamed = portal->prep_stmt_name.empty();
 
-  LOG_INFO("Executing query: %s", portal->query_string.c_str());
+  LOG_INFO("Executing query: %s", query_string.c_str());
 
   // acquire the mutex if we are starting a txn
-  if (portal->query_string.compare("BEGIN") == 0) {
+  if (query_string.compare("BEGIN") == 0) {
     LOG_WARN("BEGIN - acquire lock");
     globals.sqlite_mutex.lock();
   }
@@ -588,14 +596,14 @@ void PacketManager::exec_execute_message(Packet *pkt,
   }
 
   // release the mutex after a txn commit
-  if (portal->query_string.compare("COMMIT") == 0) {
+  if (query_string.compare("COMMIT") == 0) {
     LOG_WARN("COMMIT - release lock");
     globals.sqlite_mutex.unlock();
   }
 
   //put_row_desc(portal->rowdesc, responses);
   send_data_rows(results, results.size(), rows_affected, responses);
-  complete_command(portal->query_string, rows_affected, responses);
+  complete_command(query_type, rows_affected, responses);
 }
 
 /*

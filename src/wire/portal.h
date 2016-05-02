@@ -11,6 +11,7 @@ struct Portal {
   std::string prep_stmt_name;
   std::vector<wiredb::FieldInfoType> rowdesc;
   std::string query_string;
+  std::string query_type;
   sqlite3_stmt *stmt;
 };
 

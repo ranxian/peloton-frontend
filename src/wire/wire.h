@@ -65,6 +65,7 @@ class PacketManager {
   uchar txn_state;
   bool skipped_stmt_;
   std::string skipped_query_;
+  std::string skipped_query_type_;
 
   wiredb::Sqlite db;
 
@@ -84,13 +85,14 @@ class PacketManager {
 
   void put_dummy_data_row(int colcount, int start, ResponseBuffer& responses);
 
-  void complete_command(std::string& query_type, int rows, ResponseBuffer& responses);
+  void complete_command(const std::string& query_type,
+                        int rows, ResponseBuffer& responses);
 
   void send_empty_query_response(ResponseBuffer& responses);
 
   void make_hardcoded_parameter_status(ResponseBuffer& responses, const std::pair<std::string, std::string>& kv);
 
-  bool hardcoded_execute_filter(std::string query);
+  bool hardcoded_execute_filter(std::string query_type);
 
   void exec_query_message(Packet *pkt, ResponseBuffer &responses);
 
