@@ -307,7 +307,6 @@ void PacketManager::exec_query_message(Packet *pkt, ResponseBuffer &responses) {
     complete_command(*query, rows_affected, responses);
   }
 
-  // send_error_response({{'M', "Syntax error"}}, responses);
   send_ready_for_query('I', responses);
 }
 
@@ -402,7 +401,10 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
 
   int num_params = packet_getint(pkt, 2);
   if (num_params_format != num_params) {
-    // TODO: Should throw error here.
+    std::string err_msg =
+      "Malformed request: num_params_format is not equal to num_params";
+    send_error_response({{'M', err_msg}}, responses);
+    return;
   }
 
   // Get statement info generated in PARSE message
@@ -417,7 +419,9 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
     if (itr != cache_.end()) {
       entry = *itr;
     } else {
-      // TODO: Should throw error here
+      std::string err_msg = "Prepared statement name already exists";
+      send_error_response({{'M', err_msg}}, responses);
+      return;
     }
   }
   stmt = entry->sql_stmt;
@@ -475,7 +479,6 @@ void PacketManager::exec_bind_message(Packet *pkt, ResponseBuffer &responses) {
               buf = (buf << 8) | param[i];
             }
             memcpy(&float_val, &buf, sizeof(double));
-            // TODO: read float val
             bind_parameters.push_back(
                 std::make_pair(WIRE_FLOAT, std::to_string(float_val)));
             LOG_INFO("Bind param (size: %d) : %lf", param_len, float_val);
